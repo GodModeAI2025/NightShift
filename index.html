@@ -729,7 +729,7 @@
       <div class="arch-panel">
         <div class="arch-panel-header">
           <div class="dot" style="background:var(--accent-24x7)"></div>
-          claude-24x7-setup
+          24x7-setup
         </div>
         <div class="arch-panel-body"><span class="highlight-blue">inbox/</span>                 <span class="dim">← Drop tasks here</span>
 <span class="highlight-blue">  example-task/task.md</span>  <span class="dim">← Template</span>
@@ -903,7 +903,7 @@
         <span>Install and run Nightshift</span>
       </div>
       <div class="quickstart-body"><span class="comment"># Install skill</span>
-<span class="cmd">unzip</span> <span class="path">claude-nightshift.skill</span> <span class="flag">-d</span> ~/.claude/skills/
+<span class="cmd">unzip</span> <span class="path">nightshift.skill</span> <span class="flag">-d</span> ~/.claude/skills/
 
 <span class="comment"># Tell Claude:</span>
 <span class="comment"># "Set up a Nightshift run for /my/project</span>
@@ -926,14 +926,14 @@
         <span>Install 24x7 and drop a task</span>
       </div>
       <div class="quickstart-body"><span class="comment"># Install skill</span>
-<span class="cmd">unzip</span> <span class="path">claude-24x7.skill</span> <span class="flag">-d</span> ~/.claude/skills/
+<span class="cmd">unzip</span> <span class="path">24x7.skill</span> <span class="flag">-d</span> ~/.claude/skills/
 
 <span class="comment"># Tell Claude:</span>
 <span class="comment"># "Set up a 24x7 runner at /claude-workspace"</span>
 
 <span class="comment"># Unzip and start</span>
-<span class="cmd">unzip</span> claude-24x7-setup.zip
-<span class="cmd">cp</span> <span class="flag">-r</span> claude-24x7-setup/* <span class="path">/claude-workspace/</span>
+<span class="cmd">unzip</span> 24x7-setup.zip
+<span class="cmd">cp</span> <span class="flag">-r</span> 24x7-setup/* <span class="path">/claude-workspace/</span>
 <span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/claude-workspace/</span>*.sh
 <span class="cmd">cd</span> <span class="path">/claude-workspace</span>
 <span class="cmd">./runner-bg.sh</span>

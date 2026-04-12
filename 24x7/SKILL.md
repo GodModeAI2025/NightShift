@@ -1,6 +1,6 @@
 ---
 name: 24x7
-license: Apache License Version 2.0
+license: Apache-2.0
 compatibility: "Requires Claude Code CLI (claude -p), bash, python3, jq. macOS recommended for sandbox-exec. timeout command required."
 description: "Generates an endless Claude Code runner with inbox/outbox folder architecture as ZIP. Claude processes tasks from an inbox folder, delivers results to an outbox folder, and runs idle tasks when the queue is empty. Use this skill whenever someone wants a permanent Claude agent, a task queue, a job runner, or a drop-folder workflow. Trigger phrases: endloser Runner, 24/7 Claude, Daemon, Always-On, Job-Queue, Inbox Outbox, Drop-Folder, Hot-Folder, Task-Warteschlange, Claude als Service, dauerhaft laufen lassen."
 ---

@@ -1,6 +1,6 @@
 ---
 name: nightshift
-license: MIT
+license: Apache License Version 2.0
 compatibility: "Requires Claude Code CLI (claude -p), bash, python3, jq. macOS recommended for sandbox-exec."
 description: "Generates a complete autonomous Claude Code setup as ZIP from a project path and task description. Includes a validated runbook with genre templates, security hooks, heartbeat watchdog, and macOS sandbox profile. Use this skill whenever someone wants to run Claude Code autonomously, overnight, or unattended. Also use for headless Claude Code, dangerously-skip-permissions setup, autonomous agent runs, or batch project work. Trigger phrases: Nachtlauf, Nightshift, autonom arbeiten, über Nacht, YOLO mode einrichten, Claude absichern, Runbook erstellen."
 ---

@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Nightshift & 24x7 — Autonomous Claude Code Skills</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --bg-card: #12121a;
+    --bg-elevated: #1a1a26;
+    --border: #2a2a3a;
+    --text: #e8e8f0;
+    --text-muted: #8888a0;
+    --accent-night: #6e56cf;
+    --accent-night-glow: #8b73e6;
+    --accent-24x7: #0ea5e9;
+    --accent-24x7-glow: #38bdf8;
+    --accent-green: #22c55e;
+    --accent-amber: #f59e0b;
+    --accent-red: #ef4444;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Outfit', -apple-system, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    overflow-x: hidden;
+  }
+
+  /* Grain overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* ===== HERO ===== */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    padding: 80px 0;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(circle, rgba(110,86,207,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-label {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent-night-glow);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .hero-label::before {
+    content: '';
+    width: 32px;
+    height: 1px;
+    background: var(--accent-night);
+  }
+
+  .hero h1 {
+    font-size: clamp(42px, 6vw, 72px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -2px;
+    margin-bottom: 28px;
+  }
+
+  .hero h1 span {
+    background: linear-gradient(135deg, var(--accent-night-glow), var(--accent-24x7-glow));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-subtitle {
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text-muted);
+    max-width: 600px;
+    margin-bottom: 48px;
+  }
+
+  .hero-stats {
+    display: flex;
+    gap: 48px;
+    flex-wrap: wrap;
+  }
+
+  .hero-stat {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .hero-stat-value {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .hero-stat-label {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .scroll-hint {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    animation: float 2s ease-in-out infinite;
+  }
+
+  .scroll-hint::after {
+    content: '↓';
+    font-size: 20px;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateX(-50%) translateY(0); }
+    50% { transform: translateX(-50%) translateY(8px); }
+  }
+
+  /* ===== PROBLEM SECTION ===== */
+  .section {
+    padding: 100px 0;
+    position: relative;
+  }
+
+  .section-label {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  .section h2 {
+    font-size: clamp(28px, 4vw, 40px);
+    font-weight: 700;
+    letter-spacing: -1px;
+    margin-bottom: 20px;
+  }
+
+  .section-intro {
+    font-size: 18px;
+    color: var(--text-muted);
+    max-width: 650px;
+    margin-bottom: 48px;
+    font-weight: 300;
+  }
+
+  /* Problem cards */
+  .problems {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+
+  .problem-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .problem-card:hover {
+    border-color: var(--accent-red);
+  }
+
+  .problem-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-red), transparent);
+  }
+
+  .problem-icon {
+    font-size: 28px;
+    margin-bottom: 16px;
+  }
+
+  .problem-card h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .problem-card p {
+    font-size: 14px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  /* ===== SKILL CARDS ===== */
+  .skills-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .skills-grid { grid-template-columns: 1fr; }
+  }
+
+  .skill-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s, border-color 0.3s;
+  }
+
+  .skill-card:hover {
+    transform: translateY(-4px);
+  }
+
+  .skill-card.nightshift:hover { border-color: var(--accent-night); }
+  .skill-card.twentyfour:hover { border-color: var(--accent-24x7); }
+
+  .skill-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .skill-card.nightshift::before {
+    background: linear-gradient(90deg, var(--accent-night), var(--accent-night-glow), transparent);
+  }
+
+  .skill-card.twentyfour::before {
+    background: linear-gradient(90deg, var(--accent-24x7), var(--accent-24x7-glow), transparent);
+  }
+
+  .skill-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    border-radius: 6px;
+    display: inline-block;
+    margin-bottom: 20px;
+  }
+
+  .nightshift .skill-badge {
+    background: rgba(110,86,207,0.15);
+    color: var(--accent-night-glow);
+    border: 1px solid rgba(110,86,207,0.3);
+  }
+
+  .twentyfour .skill-badge {
+    background: rgba(14,165,233,0.15);
+    color: var(--accent-24x7-glow);
+    border: 1px solid rgba(14,165,233,0.3);
+  }
+
+  .skill-card h3 {
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    letter-spacing: -0.5px;
+  }
+
+  .skill-card .desc {
+    color: var(--text-muted);
+    font-size: 15px;
+    margin-bottom: 28px;
+    font-weight: 300;
+  }
+
+  .skill-features {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .skill-features li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .skill-features li::before {
+    content: '→';
+    font-family: var(--mono);
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ===== ARCHITECTURE ===== */
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .arch-grid { grid-template-columns: 1fr; }
+  }
+
+  .arch-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .arch-panel-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  .arch-panel-header .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .arch-panel-body {
+    padding: 24px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--text-muted);
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .arch-panel-body .highlight { color: var(--accent-night-glow); }
+  .arch-panel-body .highlight-blue { color: var(--accent-24x7-glow); }
+  .arch-panel-body .highlight-green { color: var(--accent-green); }
+  .arch-panel-body .highlight-amber { color: var(--accent-amber); }
+  .arch-panel-body .dim { color: #555568; }
+
+  /* ===== GENRE SECTION ===== */
+  .genres {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+
+  @media (max-width: 768px) {
+    .genres { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .genre-tag {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    transition: border-color 0.3s, transform 0.2s;
+  }
+
+  .genre-tag:hover {
+    border-color: var(--accent-night);
+    transform: translateY(-2px);
+  }
+
+  .genre-tag h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .genre-tag span {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  /* ===== COMPARISON TABLE ===== */
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .compare-table th {
+    text-align: left;
+    padding: 16px 20px;
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .compare-table td {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  .compare-table td:first-child {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .compare-table tr:hover td {
+    background: var(--bg-card);
+  }
+
+  .tag-night {
+    color: var(--accent-night-glow);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .tag-24x7 {
+    color: var(--accent-24x7-glow);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  /* ===== SECURITY ===== */
+  .security-layers {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+
+  @media (max-width: 768px) {
+    .security-layers { grid-template-columns: 1fr 1fr; }
+  }
+
+  .security-layer {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    position: relative;
+  }
+
+  .security-layer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-green), transparent);
+  }
+
+  .security-layer .num {
+    font-family: var(--mono);
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--accent-green);
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+
+  .security-layer h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .security-layer p {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  /* ===== QUICKSTART ===== */
+  .quickstart {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .quickstart-header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .quickstart-header .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .quickstart-header .dot.r { background: #ff5f56; }
+  .quickstart-header .dot.y { background: #ffbd2e; }
+  .quickstart-header .dot.g { background: #27c93f; }
+
+  .quickstart-header span {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-left: 12px;
+  }
+
+  .quickstart-body {
+    padding: 28px;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 2;
+    overflow-x: auto;
+  }
+
+  .quickstart-body .comment { color: #555568; }
+  .quickstart-body .cmd { color: var(--accent-green); }
+  .quickstart-body .flag { color: var(--accent-amber); }
+  .quickstart-body .path { color: var(--accent-24x7-glow); }
+
+  /* ===== FOOTER ===== */
+  .footer {
+    padding: 60px 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+
+  .footer p {
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+
+  .footer .version {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #555568;
+    margin-top: 8px;
+  }
+
+  /* Divider */
+  .divider {
+    width: 60px;
+    height: 2px;
+    background: var(--border);
+    margin: 80px auto;
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-label">Claude Code Skills</div>
+    <h1>Claude works.<br><span>You sleep.</span></h1>
+    <p class="hero-subtitle">Two skills that turn Claude Code from an interactive tool into an autonomous worker. Validated, secured, ready for overnight runs.</p>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="hero-stat-value">2</div>
+        <div class="hero-stat-label">Skills</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">8</div>
+        <div class="hero-stat-label">Genre Templates</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">4</div>
+        <div class="hero-stat-label">Security Layers</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-value">0</div>
+        <div class="hero-stat-label">Humans at the Terminal</div>
+      </div>
+    </div>
+  </div>
+  <div class="scroll-hint">Explore</div>
+</section>
+
+<!-- PROBLEM -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">The Problem</div>
+    <h2>Claude Code Needs Babysitting</h2>
+    <p class="section-intro">This is what it looks like when you use Claude Code for larger tasks. Four problems everyone encounters who has tried it.</p>
+
+    <div class="problems">
+      <div class="problem-card">
+        <div class="problem-icon">⏱</div>
+        <h3>Approval Fatigue</h3>
+        <p>40 clicks per hour on "Approve". After 20 minutes, you stop reading what you're approving.</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">🧠</div>
+        <h3>Context Loss</h3>
+        <p>After /compact, Claude forgets the plan, the stack, the completed steps. Without correction, it loops.</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">💥</div>
+        <h3>No Protection</h3>
+        <p>rm -rf ~/ has documented cases of deleting entire home directories. --dangerously-skip-permissions alone is not a safety concept.</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-icon">🪑</div>
+        <h3>Human Required</h3>
+        <p>No overnight runs. No parallel work. Leave the terminal, Claude stops.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- SKILLS -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">The Solution</div>
+    <h2>Two Skills. Two Operating Modes.</h2>
+    <p class="section-intro">Nightshift for planned project work. 24x7 for a continuous task queue. Both generate a complete, ready-to-run setup.</p>
+
+    <div class="skills-grid">
+      <div class="skill-card nightshift">
+        <div class="skill-badge">Nightshift</div>
+        <h3>The Sprint</h3>
+        <p class="desc">One task. One project. One validated plan. Claude works all night and commits the result in the morning.</p>
+        <ul class="skill-features">
+          <li>Describe the task, pick a genre, install, start</li>
+          <li>8 genre templates: Refactoring, Feature, Migration, Bugfix, Testing, Cleanup, DevOps, Docs</li>
+          <li>15-point validation checks every runbook step before launch</li>
+          <li>Compact recovery: hook re-injects the plan after every context compression</li>
+          <li>Checkpoint repetition: constraints are repeated every 5 completed steps</li>
+          <li>Result: a clean git commit the next morning</li>
+        </ul>
+      </div>
+      <div class="skill-card twentyfour">
+        <div class="skill-badge">24x7</div>
+        <h3>The Daemon</h3>
+        <p class="desc">Endless runner. Drop tasks as folders. Claude processes them sequentially and delivers results.</p>
+        <ul class="skill-features">
+          <li>Inbox/outbox architecture: mkdir, write task.md, done</li>
+          <li>Every task gets a fresh session — no context rot</li>
+          <li>Bash loop is the daemon, Claude is the worker</li>
+          <li>Configurable idle behavior: cleanup, docs, tests, or sleep</li>
+          <li>Watchdog shows live counters: inbox, working, done, failed</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ARCHITECTURE -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">Architecture</div>
+    <h2>What the Skills Generate</h2>
+    <p class="section-intro">Each skill generates a complete setup. Install, copy into your project, start.</p>
+
+    <div class="arch-grid">
+      <div class="arch-panel">
+        <div class="arch-panel-header">
+          <div class="dot" style="background:var(--accent-night)"></div>
+          nightshift-setup
+        </div>
+        <div class="arch-panel-body"><span class="highlight">runbook.md</span>            <span class="dim">← Task plan with checkboxes</span>
+<span class="highlight">.claude/settings.json</span>  <span class="dim">← Hooks: security + heartbeat + compact + checkpoint</span>
+<span class="highlight">nightshift-run.sh</span>      <span class="dim">← Headless + skip-permissions + PID lock</span>
+<span class="dim">nightshift-run-bg.sh</span>   <span class="dim">← Background starter (nohup)</span>
+<span class="highlight-amber">nightshift-watchdog.sh</span> <span class="dim">← Heartbeat monitor</span>
+<span class="highlight-green">nightshift-sandbox.sb</span>  <span class="dim">← macOS kernel sandbox</span>
+<span class="dim">CLAUDE-nightshift.md</span>   <span class="dim">← Append to CLAUDE.md</span>
+<span class="dim">README-nightshift.md</span>   <span class="dim">← Installation guide</span></div>
+      </div>
+      <div class="arch-panel">
+        <div class="arch-panel-header">
+          <div class="dot" style="background:var(--accent-24x7)"></div>
+          claude-24x7-setup
+        </div>
+        <div class="arch-panel-body"><span class="highlight-blue">inbox/</span>                 <span class="dim">← Drop tasks here</span>
+<span class="highlight-blue">  example-task/task.md</span>  <span class="dim">← Template</span>
+<span class="dim">working/</span>               <span class="dim">← Auto-populated</span>
+<span class="highlight-green">outbox/</span>                <span class="dim">← Collect results</span>
+<span class="highlight-amber">failed/</span>                <span class="dim">← Failed tasks</span>
+<span class="highlight-blue">runner.sh</span>              <span class="dim">← Endless loop + PID lock</span>
+<span class="highlight-amber">watchdog.sh</span>            <span class="dim">← Live status with counters</span>
+<span class="highlight-green">sandbox.sb</span>             <span class="dim">← macOS kernel sandbox</span>
+<span class="dim">.claude/settings.json</span>  <span class="dim">← Security hooks</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- GENRES -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">Genre Templates</div>
+    <h2>8 Templates for Every Task Type</h2>
+    <p class="section-intro">Nightshift detects the task type and fills the runbook with the matching phases, risk checks, and autonomy zones.</p>
+
+    <div class="genres">
+      <div class="genre-tag">
+        <h4>Refactoring</h4>
+        <span>5 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>Feature</h4>
+        <span>6 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>Migration</h4>
+        <span>5 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>Bugfix</h4>
+        <span>5 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>Testing</h4>
+        <span>4 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>Cleanup</h4>
+        <span>4 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>DevOps</h4>
+        <span>4 phases</span>
+      </div>
+      <div class="genre-tag">
+        <h4>Documentation</h4>
+        <span>4 phases</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- COMPARISON -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">Comparison</div>
+    <h2>When to Use Which Skill?</h2>
+
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th>Property</th>
+          <th><span class="tag-night">Nightshift</span></th>
+          <th><span class="tag-24x7">24x7</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Mode</td>
+          <td>Single run, then exit</td>
+          <td>Endless loop</td>
+        </tr>
+        <tr>
+          <td>Task type</td>
+          <td>Planned project work</td>
+          <td>Continuous task queue</td>
+        </tr>
+        <tr>
+          <td>Workspace</td>
+          <td>Directly in the project repo</td>
+          <td>Isolated workspace</td>
+        </tr>
+        <tr>
+          <td>Runbook</td>
+          <td>Validated, genre-based</td>
+          <td>Freeform via task.md</td>
+        </tr>
+        <tr>
+          <td>Compact recovery</td>
+          <td>Hook re-injects plan</td>
+          <td>Not needed (fresh session)</td>
+        </tr>
+        <tr>
+          <td>Output</td>
+          <td>Git commit in project</td>
+          <td>Files in outbox/output/</td>
+        </tr>
+        <tr>
+          <td>Parallel projects</td>
+          <td>Start multiple nightshifts</td>
+          <td>One queue, sequential</td>
+        </tr>
+        <tr>
+          <td>Idle behavior</td>
+          <td>—</td>
+          <td>Configurable</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- SECURITY -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">Security</div>
+    <h2>Four Layers of Defense</h2>
+    <p class="section-intro">--dangerously-skip-permissions alone is not a safety concept. Both skills build four lines of defense.</p>
+
+    <div class="security-layers">
+      <div class="security-layer">
+        <div class="num">1</div>
+        <h4>PreToolUse Hook</h4>
+        <p>Blocks rm -rf, sudo, mkfs, chmod 777, curl|bash, eval, fork bombs</p>
+      </div>
+      <div class="security-layer">
+        <div class="num">2</div>
+        <h4>macOS Sandbox</h4>
+        <p>Kernel-level isolation. Claude can only write to the project folder and /tmp.</p>
+      </div>
+      <div class="security-layer">
+        <div class="num">3</div>
+        <h4>Git as Emergency Brake</h4>
+        <p>git checkout . reverts everything. Always commit before starting.</p>
+      </div>
+      <div class="security-layer">
+        <div class="num">4</div>
+        <h4>Watchdog</h4>
+        <p>Heartbeat monitor detects when Claude stalls. macOS notification or custom alerting.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- QUICKSTART -->
+<section class="section">
+  <div class="container">
+    <div class="section-label">Quickstart</div>
+    <h2>Up and Running in 3 Minutes</h2>
+
+    <div class="quickstart" style="margin-bottom: 24px;">
+      <div class="quickstart-header">
+        <div class="dot r"></div>
+        <div class="dot y"></div>
+        <div class="dot g"></div>
+        <span>Install and run Nightshift</span>
+      </div>
+      <div class="quickstart-body"><span class="comment"># Install skill</span>
+<span class="cmd">unzip</span> <span class="path">claude-nightshift.skill</span> <span class="flag">-d</span> ~/.claude/skills/
+
+<span class="comment"># Tell Claude:</span>
+<span class="comment"># "Set up a Nightshift run for /my/project</span>
+<span class="comment">#  — migrate auth module to JWT"</span>
+
+<span class="comment"># Unzip and start</span>
+<span class="cmd">unzip</span> nightshift-setup.zip
+<span class="cmd">cp</span> <span class="flag">-r</span> nightshift-setup/* <span class="path">/my/project/</span>
+<span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/my/project/</span>nightshift-*.sh
+<span class="cmd">cd</span> <span class="path">/my/project</span>
+<span class="cmd">git</span> add -A && <span class="cmd">git</span> commit <span class="flag">-m</span> <span class="path">"Checkpoint before Nightshift"</span>
+<span class="cmd">sandbox-exec</span> <span class="flag">-f</span> nightshift-sandbox.sb <span class="cmd">./nightshift-run.sh</span></div>
+    </div>
+
+    <div class="quickstart">
+      <div class="quickstart-header">
+        <div class="dot r"></div>
+        <div class="dot y"></div>
+        <div class="dot g"></div>
+        <span>Install 24x7 and drop a task</span>
+      </div>
+      <div class="quickstart-body"><span class="comment"># Install skill</span>
+<span class="cmd">unzip</span> <span class="path">claude-24x7.skill</span> <span class="flag">-d</span> ~/.claude/skills/
+
+<span class="comment"># Tell Claude:</span>
+<span class="comment"># "Set up a 24x7 runner at /claude-workspace"</span>
+
+<span class="comment"># Unzip and start</span>
+<span class="cmd">unzip</span> claude-24x7-setup.zip
+<span class="cmd">cp</span> <span class="flag">-r</span> claude-24x7-setup/* <span class="path">/claude-workspace/</span>
+<span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/claude-workspace/</span>*.sh
+<span class="cmd">cd</span> <span class="path">/claude-workspace</span>
+<span class="cmd">./runner-bg.sh</span>
+
+<span class="comment"># Drop a task — anytime</span>
+<span class="cmd">mkdir</span> <span class="flag">-p</span> <span class="path">inbox/my-task/materials</span>
+<span class="cmd">nano</span> <span class="path">inbox/my-task/task.md</span>
+<span class="comment"># The runner picks it up automatically</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="container">
+    <p>Claude Nightshift & 24x7 — Autonomous Claude Code Skills</p>
+    <p class="version">v1.0 · MIT License · Compatible with Claude Code CLI</p>
+    <p style="margin-top: 20px; font-size: 13px; color: #555568;">Autonomy zones and error budget inspired by <a href="https://alpitype.de/insights/ki-agenten-approval-loop/" style="color: var(--text-muted); text-decoration: underline;">AlpiType — Solving the AI Agent Approval Loop</a></p>
+    <p style="margin-top: 12px; font-size: 12px; color: #444458; max-width: 600px; margin-left: auto; margin-right: auto;">Disclaimer: This project was created privately, to the best of the author's knowledge. Use at your own risk. No warranty of completeness, correctness, or fitness for any particular purpose.</p>
+  </div>
+</footer>
+
+</body>
+</html>

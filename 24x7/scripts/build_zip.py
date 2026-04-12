@@ -11,7 +11,9 @@ from datetime import datetime
 # ║  VARIABLEN ANPASSEN                                     ║
 # ╚══════════════════════════════════════════════════════════╝
 
-WORKSPACE = "/Users/mark/claude-workspace"
+WORKSPACE = os.environ.get("CLAUDE_24X7_WORKSPACE", "REPLACE_ME")
+if WORKSPACE == "REPLACE_ME":
+    raise SystemExit("ERROR: Set WORKSPACE before running, or export CLAUDE_24X7_WORKSPACE=/your/workspace")
 HOMEDIR = os.path.expanduser("~")
 POLL_INTERVAL = 30          # Sekunden zwischen Inbox-Checks
 MAX_TASK_MINUTES = 60       # Timeout pro Task

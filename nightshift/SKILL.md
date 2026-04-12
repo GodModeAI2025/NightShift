@@ -111,7 +111,14 @@ Copy and configure the build script:
 cp /mnt/skills/user/nightshift/scripts/build_zip.py /home/claude/build_nightshift.py
 ```
 
-Set these variables: PROJEKTPFAD, AUFGABE_TITEL, AUFGABE_KURZ, TESTBEFEHL, STACK_INFO, GENRE, RUNBOOK (the validated runbook text).
+Set variables directly in the script OR pass as environment variables:
+- `PROJEKTPFAD` — absolute project path (or `export NIGHTSHIFT_PROJECT=/path`)
+- `AUFGABE_TITEL` — task title
+- `AUFGABE_KURZ` — short title for git commit message
+- `TESTBEFEHL` — test command from stack detection
+- `STACK_INFO` — detected technologies
+- `GENRE` — selected genre
+- `RUNBOOK` — the validated runbook text (the core content)
 
 ```bash
 python3 /home/claude/build_nightshift.py

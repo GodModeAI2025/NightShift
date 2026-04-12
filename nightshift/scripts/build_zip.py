@@ -11,7 +11,9 @@ from datetime import datetime
 # ║  DIESE VARIABLEN VOR AUSFÜHRUNG ANPASSEN!               ║
 # ╚══════════════════════════════════════════════════════════╝
 
-PROJEKTPFAD = "/Users/mark/projekte/mein-api"
+PROJEKTPFAD = os.environ.get("NIGHTSHIFT_PROJECT", "REPLACE_ME")
+if PROJEKTPFAD == "REPLACE_ME":
+    raise SystemExit("ERROR: Set PROJEKTPFAD before running, or export NIGHTSHIFT_PROJECT=/your/project")
 HOMEDIR = os.path.expanduser("~")
 AUFGABE_TITEL = "Auth-Modul auf JWT umstellen"
 AUFGABE_KURZ = "nightshift: Auth auf JWT"

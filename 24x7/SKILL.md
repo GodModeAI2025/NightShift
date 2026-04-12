@@ -89,7 +89,11 @@ Copy and configure the build script:
 cp /mnt/skills/user/24x7/scripts/build_zip.py /home/claude/build_24x7.py
 ```
 
-Set these variables: WORKSPACE, IDLE_BEHAVIOR, POLL_INTERVAL (default 30s), MAX_TASK_MINUTES (default 60).
+Set variables directly in the script OR pass as environment variables:
+- `WORKSPACE` — absolute workspace path (or `export CLAUDE_24X7_WORKSPACE=/path`)
+- `IDLE_BEHAVIOR` — cleanup, docs, tests, or sleep
+- `POLL_INTERVAL` — seconds between inbox checks (default 30)
+- `MAX_TASK_MINUTES` — timeout per task (default 60)
 
 ```bash
 python3 /home/claude/build_24x7.py

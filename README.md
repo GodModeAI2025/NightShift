@@ -124,6 +124,28 @@ The setup is only generated when all 15 checks pass — or when you explicitly o
 
 Every 5 completed steps (checked boxes in the runbook), a `Stop` hook fires and reminds Claude of the autonomy zones and error budget. This prevents drift during long runs — Claude re-reads its constraints regularly, not just after context compression.
 
+### Stall Detection (Loop Prevention)
+
+The Stop hook doesn't just check for checkpoints — it tracks progress. If the number of completed runbook steps hasn't increased after 3 consecutive checks, a STALL WARNING is injected into Claude's context. This catches the most common failure mode in autonomous runs: Claude gets stuck on a failing test and retries it endlessly, burning API credits without making progress.
+
+The warning tells Claude to check its error budget and skip the step if the budget allows it. If the budget doesn't allow skipping, Claude stops the run and writes a log — which is the correct behavior for a real regression.
+
+The watchdog sees heartbeats during a stall (Claude is alive and working), so without stall detection, you'd only discover the loop in the morning when you check the runbook and see step 7 still unchecked after 6 hours.
+
+### Run Memory (decisions.md)
+
+Nightshift runs are ephemeral — Claude starts fresh each time. But architecture decisions made in one run should inform the next. If Tuesday's run chose PostgreSQL over SQLite, Wednesday's run should know that.
+
+The solution: a `decisions.md` file in the project root that persists across runs.
+
+- The runbook's conclusion phase includes a step: "Document decisions in decisions.md"
+- The CLAUDE-nightshift.md instructs Claude to read `decisions.md` at the start of every run
+- Format: date, decision, reasoning. Append-only, never overwrite.
+
+This gives cross-run persistence without requiring a long-lived session or external memory system. It's not learning — it's structured remembering.
+
+The 24x7 skill uses the same pattern at workspace level: each task reads `decisions.md` from the workspace root and appends relevant decisions after completing work.
+
 ---
 
 ## Installation
@@ -413,7 +435,7 @@ kill $(cat /tmp/24x7.pid)
 | `nightshift-run-bg.sh` | Background wrapper using `nohup` |
 | `nightshift-watchdog.sh` | Heartbeat monitor with configurable timeout |
 | `nightshift-sandbox.sb` | macOS sandbox profile (Seatbelt) |
-| `CLAUDE-nightshift.md` | Conventions to append to your project's CLAUDE.md |
+| `CLAUDE-nightshift.md` | Conventions + run memory (decisions.md) to append to CLAUDE.md |
 | `README-nightshift.md` | Quick reference for the generated setup |
 
 ### 24x7 Setup Files
@@ -425,7 +447,7 @@ kill $(cat /tmp/24x7.pid)
 | `watchdog.sh` | Heartbeat monitor with live inbox/outbox counters |
 | `sandbox.sb` | macOS sandbox profile |
 | `.claude/settings.json` | PreToolUse + PostToolUse hooks |
-| `CLAUDE.md` | Workspace rules with autonomy zones and error tolerance |
+| `CLAUDE.md` | Workspace rules: autonomy zones, error tolerance, workspace memory (decisions.md) |
 | `idle/idle-tasks.md` | Configurable idle behavior |
 | `inbox/example-task/` | Example task with task.md template |
 

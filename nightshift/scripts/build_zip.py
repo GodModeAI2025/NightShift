@@ -74,6 +74,7 @@ Testbefehl: {TESTBEFEHL}
 - [ ] Geaenderte Dateien reviewen
 
 ### Abschluss
+- [ ] Getroffene Entscheidungen in decisions.md dokumentieren (erstellen falls nicht vorhanden)
 - [ ] CHANGELOG.md aktualisieren
 - [ ] `git add -A && git commit -m '{AUFGABE_KURZ}'`
 
@@ -302,7 +303,25 @@ SETTINGS = {
                             "RUNBOOK=\"runbook.md\"; "
                             "[ -f \"$RUNBOOK\" ] || exit 0; "
                             "DONE=$(grep -c \"\\[x\\]\" \"$RUNBOOK\" 2>/dev/null || echo 0); "
-                            "if [ \"$DONE\" -gt 0 ] && [ $(($DONE % 5)) -eq 0 ]; then "
+                            ""
+                            "# Stall detection: 3 checks without progress = warning"
+                            " PROGRESS_FILE=\"/tmp/nightshift-progress\"; "
+                            "STALL_FILE=\"/tmp/nightshift-stall\"; "
+                            "LAST_DONE=$(cat \"$PROGRESS_FILE\" 2>/dev/null || echo 0); "
+                            "echo \"$DONE\" > \"$PROGRESS_FILE\"; "
+                            "if [ \"$DONE\" -eq \"$LAST_DONE\" ] && [ \"$DONE\" -gt 0 ]; then "
+                            "STALL=$(($(cat \"$STALL_FILE\" 2>/dev/null || echo 0) + 1)); "
+                            "echo \"$STALL\" > \"$STALL_FILE\"; "
+                            "if [ \"$STALL\" -ge 3 ]; then "
+                            "echo \"STALL WARNING: Kein Fortschritt seit 3 Checks ($DONE Schritte). "
+                            "Moeglicher Loop. Pruefe ob du an einem Schritt haengst. "
+                            "Wenn ein Test wiederholt fehlschlaegt: Lies das Fehler-Budget in runbook.md. "
+                            "Ueberspringe den Schritt wenn das Budget es erlaubt.\"; "
+                            "fi; "
+                            "else echo 0 > \"$STALL_FILE\"; fi; "
+                            ""
+                            "# Checkpoint every 5 steps"
+                            " if [ \"$DONE\" -gt 0 ] && [ $(($DONE % 5)) -eq 0 ] && [ \"$DONE\" -ne \"$LAST_DONE\" ]; then "
                             "echo \"CHECKPOINT ($DONE Schritte erledigt): "
                             "Lies die Autonomiebereiche und Fehler-Toleranz in runbook.md erneut. "
                             "Pruefe ob du noch auf Kurs bist. "
@@ -457,6 +476,11 @@ CLAUDE_NIGHTSHIFT_MD = f"""## Nightshift-Konventionen
 - Keine Dateien ausserhalb des Projektordners aendern
 - Stack: {STACK_INFO}
 - Genre: {GENRE}
+
+## Run-Gedaechtnis
+- Lies `decisions.md` falls vorhanden — enthaelt Architektur-Entscheidungen vorheriger Runs
+- Dokumentiere eigene Entscheidungen am Ende in `decisions.md` (erstellen falls nicht vorhanden)
+- Format: Datum, Entscheidung, Begruendung
 """
 
 # Genre-Info für README

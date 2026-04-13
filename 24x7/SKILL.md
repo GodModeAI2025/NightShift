@@ -114,10 +114,16 @@ python3 /home/claude/build_24x7.py
 | watchdog.sh | Heartbeat monitor with live status: 📥inbox 🔄working ✅done ❌failed |
 | sandbox.sb | macOS sandbox profile — restricts filesystem to workspace + /tmp |
 | .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat) |
-| CLAUDE.md | Workspace rules for Claude: isolation, output conventions, security |
+| CLAUDE.md | Workspace rules: isolation, autonomy zones, error tolerance, workspace memory |
 | idle/idle-tasks.md | Configurable idle behavior |
 | inbox/beispiel-task/ | Example task with task.md template |
 | README.md | Full installation, usage, and configuration guide |
+
+## Workspace Memory (decisions.md)
+
+Each task runs in a fresh Claude session — no shared context. But decisions made in one task often matter for later tasks (e.g., "we chose PostgreSQL over SQLite" or "API naming follows camelCase"). The runner instructs Claude to read `decisions.md` from the workspace root at the start of each task, and append relevant decisions at the end. This gives cross-task persistence without a long-lived session.
+
+Format: date, task name, decision, reasoning. Append-only.
 
 ## Error handling
 

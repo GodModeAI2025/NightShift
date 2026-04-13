@@ -137,13 +137,23 @@ The ZIP contains:
 | File | Purpose |
 |------|---------|
 | runbook.md | Task plan with checkboxes — Claude's external memory |
-| .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat), SessionStart (compact recovery), Stop (checkpoint every 5 steps) |
+| .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat), SessionStart (compact recovery), Stop (checkpoint + stall detection) |
 | nightshift-run.sh | Main script: headless mode + skip-permissions + PID lock + graceful shutdown |
 | nightshift-run-bg.sh | Background starter (nohup) |
 | nightshift-watchdog.sh | Heartbeat monitor with macOS notification support |
 | nightshift-sandbox.sb | macOS sandbox profile — restricts filesystem to project + /tmp |
-| CLAUDE-nightshift.md | Append to CLAUDE.md for project conventions |
+| CLAUDE-nightshift.md | Append to CLAUDE.md for project conventions + run memory |
 | README-nightshift.md | Full installation and usage guide |
+
+## Run Memory (decisions.md)
+
+Nightshift runs are ephemeral — Claude starts fresh each time. But architecture decisions made in one run should inform the next. The runbook's Abschluss phase includes a step to document decisions in `decisions.md`. The CLAUDE-nightshift.md instructs Claude to read this file at the start of every run. This gives persistence across runs without requiring a long-lived session.
+
+Format: date, decision, reasoning. Append-only, never overwrite.
+
+## Stall Detection (Loop Prevention)
+
+The Stop hook tracks progress between checks. If the number of completed runbook steps has not increased after 3 consecutive checks, a STALL WARNING is injected into Claude's context. This catches loops where Claude repeatedly fails at the same step (e.g., a flaky test) without triggering the error budget. The warning tells Claude to check its error budget and skip the step if allowed.
 
 ## Error handling
 

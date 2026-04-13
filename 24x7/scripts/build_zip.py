@@ -61,6 +61,13 @@ Rot — Verboten:
 
 ## Idle-Verhalten: {IDLE_BEHAVIOR}
 Wenn du als Idle-Task gestartet wirst, halte dich an idle/idle-tasks.md
+
+## Workspace-Gedaechtnis
+- Lies `{WORKSPACE}/decisions.md` am Anfang jedes Tasks falls vorhanden
+- Die Datei enthaelt Entscheidungen und Erkenntnisse aus vorherigen Tasks
+- Schreibe eigene relevante Entscheidungen am Ende deines Tasks dazu (append, nicht ueberschreiben)
+- Format: Datum, Task-Name, Entscheidung, Begruendung
+- Nur Entscheidungen dokumentieren die fuer andere Tasks relevant sein koennten
 """
 
 IDLE_TASKS = {
@@ -243,6 +250,8 @@ REGELN:
 - Materialien liegen in $WORKING/$TASK_NAME/materials/
 - Ergebnisse NUR in $WORKING/$TASK_NAME/output/ ablegen
 - Erstelle $WORKING/$TASK_NAME/log.md mit Zusammenfassung
+- Lies $WORKSPACE/decisions.md falls vorhanden (Entscheidungen vorheriger Tasks)
+- Schreibe relevante eigene Entscheidungen an $WORKSPACE/decisions.md an (append)
 - Arbeite NUR in diesem Ordner
 - Wenn fertig: Session beenden" \\
       --dangerously-skip-permissions \\

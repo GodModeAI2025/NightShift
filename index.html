@@ -816,7 +816,8 @@
           <li>8 genre templates: Refactoring, Feature, Migration, Bugfix, Testing, Cleanup, DevOps, Docs</li>
           <li>15-point validation checks every runbook step before launch</li>
           <li>Compact recovery: hook re-injects the plan after every context compression</li>
-          <li>Checkpoint repetition: constraints are repeated every 5 completed steps</li>
+          <li>Stall detection: 3 checks without progress triggers a loop warning</li>
+          <li>Run memory: decisions.md persists architecture decisions across runs</li>
           <li>Result: a clean git commit the next morning</li>
         </ul>
       </div>
@@ -828,6 +829,7 @@
           <li>Inbox/outbox architecture: mkdir, write task.md, done</li>
           <li>Every task gets a fresh session — no context rot</li>
           <li>Bash loop is the daemon, Claude is the worker</li>
+          <li>Workspace memory: decisions.md shares context across tasks</li>
           <li>Configurable idle behavior: cleanup, docs, tests, or sleep</li>
           <li>Watchdog shows live counters: inbox, working, done, failed</li>
         </ul>
@@ -851,13 +853,13 @@
           <div class="dot" style="background:var(--accent-night)"></div>
           nightshift-setup
         </div>
-        <div class="arch-panel-body"><span class="highlight">runbook.md</span>            <span class="dim">← Task plan with checkboxes</span>
-<span class="highlight">.claude/settings.json</span>  <span class="dim">← Hooks: security + heartbeat + compact + checkpoint</span>
+        <div class="arch-panel-body"><span class="highlight">runbook.md</span>            <span class="dim">← Task plan + autonomy zones + error budget</span>
+<span class="highlight">.claude/settings.json</span>  <span class="dim">← Hooks: security + heartbeat + compact + stall detect</span>
 <span class="highlight">nightshift-run.sh</span>      <span class="dim">← Headless + skip-permissions + PID lock</span>
 <span class="dim">nightshift-run-bg.sh</span>   <span class="dim">← Background starter (nohup)</span>
 <span class="highlight-amber">nightshift-watchdog.sh</span> <span class="dim">← Heartbeat monitor</span>
 <span class="highlight-green">nightshift-sandbox.sb</span>  <span class="dim">← macOS kernel sandbox</span>
-<span class="dim">CLAUDE-nightshift.md</span>   <span class="dim">← Append to CLAUDE.md</span>
+<span class="dim">CLAUDE-nightshift.md</span>   <span class="dim">← Conventions + run memory (decisions.md)</span>
 <span class="dim">README-nightshift.md</span>   <span class="dim">← Installation guide</span></div>
       </div>
       <div class="arch-panel">
@@ -873,6 +875,7 @@
 <span class="highlight-blue">runner.sh</span>              <span class="dim">← Endless loop + PID lock</span>
 <span class="highlight-amber">watchdog.sh</span>            <span class="dim">← Live status with counters</span>
 <span class="highlight-green">sandbox.sb</span>             <span class="dim">← macOS kernel sandbox</span>
+<span class="dim">CLAUDE.md</span>              <span class="dim">← Rules + workspace memory (decisions.md)</span>
 <span class="dim">.claude/settings.json</span>  <span class="dim">← Security hooks</span></div>
       </div>
     </div>
@@ -982,6 +985,16 @@
           <td>—</td>
           <td>Configurable</td>
         </tr>
+        <tr>
+          <td>Loop detection</td>
+          <td>Stall warning after 3 checks without progress</td>
+          <td>Not needed (fresh session per task)</td>
+        </tr>
+        <tr>
+          <td>Cross-run memory</td>
+          <td>decisions.md in project root</td>
+          <td>decisions.md in workspace root</td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -1042,7 +1055,7 @@
       <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Blocks rm -rf, sudo, mkfs, chmod 777, curl|bash, eval
 <span style="color:var(--accent-green)">PostToolUse</span>   → Writes heartbeat timestamp after every tool call
 <span style="color:var(--accent-night-glow)">SessionStart</span>  → After /compact: "Re-read runbook.md, continue at next open item"
-<span style="color:var(--accent-24x7-glow)">Stop</span>          → Every 5 completed steps: repeat autonomy zones + error budget</div>
+<span style="color:var(--accent-24x7-glow)">Stop</span>          → Every 5 steps: repeat constraints. 3× no progress: STALL WARNING</div>
     </div>
 
     <div class="layer-detail">
@@ -1054,6 +1067,19 @@
     <div class="layer-detail">
       <h4><span class="badge">Layer 4</span> Watchdog — Liveness Monitoring</h4>
       <p>A separate script that checks the heartbeat log. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm. On macOS, this is a system notification. You can extend it with your own alerting (Slack webhook, email, etc.).</p>
+    </div>
+
+    <div class="layer-detail" style="border-color: var(--accent-amber);">
+      <h4><span class="badge" style="background: rgba(245,158,11,0.12); color: var(--accent-amber); border-color: rgba(245,158,11,0.25);">New</span> Stall Detection — Loop Prevention</h4>
+      <p>The watchdog catches crashes (no heartbeat). But what about loops? Claude retries the same failing test 50 times — the heartbeat looks healthy, but no progress is made. The Stop hook now tracks completed steps between checks. If 3 consecutive checks show no new checkmarks in the runbook, a <strong>STALL WARNING</strong> is injected into Claude's context.</p>
+      <p style="margin-top: 12px;">The warning tells Claude to check its error budget and skip the step if allowed. This catches the most expensive failure mode in autonomous runs: burning hours of API credits on a loop that a human would have interrupted after 5 minutes.</p>
+    </div>
+
+    <div class="layer-detail" style="border-color: var(--accent-night);">
+      <h4><span class="badge" style="background: rgba(110,86,207,0.12); color: var(--accent-night-glow); border-color: rgba(110,86,207,0.25);">New</span> Run Memory — decisions.md</h4>
+      <p>Autonomous runs are ephemeral — Claude starts fresh each time. But architecture decisions made in one run should inform the next. If Tuesday's run chose PostgreSQL over SQLite, Wednesday's run should know that.</p>
+      <p style="margin-top: 12px;">Both skills now maintain a <code>decisions.md</code> file. Claude reads it at the start of every run and appends relevant decisions at the end. Format: date, decision, reasoning. Append-only, never overwrite. It's not learning — it's structured remembering.</p>
+      <p style="margin-top: 12px;"><strong>Nightshift:</strong> <code>decisions.md</code> in the project root, persists across overnight runs. <strong>24x7:</strong> <code>decisions.md</code> in the workspace root, shared across all tasks.</p>
     </div>
   </div>
 </section>

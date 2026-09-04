@@ -1244,8 +1244,8 @@
       </div>
       <div class="problem-card" style="border-top: 2px solid var(--accent-green);">
         <div class="problem-icon">🐚</div>
-        <h3>bash, python3, jq</h3>
-        <p>The runner scripts are bash. The build script is Python. Hooks use jq to parse JSON. All three must be in your PATH.</p>
+        <h3>bash, python3 (3.9+), jq</h3>
+        <p>The runner scripts are bash. The build script is Python and needs version 3.9 or newer. Hooks use jq to parse JSON. All three must be in your PATH. The 24x7 runner additionally needs <code>timeout</code> or <code>gtimeout</code> — macOS ships neither, <code>brew install coreutils</code> provides <code>gtimeout</code>.</p>
       </div>
       <div class="problem-card" style="border-top: 2px solid var(--accent-green);">
         <div class="problem-icon">🍎</div>
@@ -1284,7 +1284,13 @@
 <span class="comment">#  — migrate auth module to JWT"</span>
 
 <span class="comment"># Copy generated files into project</span>
+<span class="comment"># (the * glob skips dotfiles, .claude needs its own step)</span>
 <span class="cmd">cp</span> <span class="flag">-r</span> nightshift-setup/* <span class="path">/my/project/</span>
+<span class="comment"># Hooks live in .claude, copy only if there is none yet,</span>
+<span class="comment"># otherwise merge (see the guide), never overwrite</span>
+<span class="cmd">test</span> <span class="flag">-e</span> <span class="path">/my/project/.claude/settings.json</span> \
+  && <span class="cmd">echo</span> "settings.json exists, merge it" \
+  || <span class="cmd">cp</span> <span class="flag">-R</span> nightshift-setup/.claude <span class="path">/my/project/</span>
 <span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/my/project/</span>nightshift-*.sh
 <span class="cmd">cd</span> <span class="path">/my/project</span>
 
@@ -1315,7 +1321,13 @@
 <span class="comment"># "Set up a 24x7 runner at /claude-workspace"</span>
 
 <span class="comment"># Copy and start</span>
+<span class="comment"># (the * glob skips dotfiles, .claude needs its own step)</span>
 <span class="cmd">cp</span> <span class="flag">-r</span> 24x7-setup/* <span class="path">/claude-workspace/</span>
+<span class="comment"># Hooks live in .claude, copy only if there is none yet,</span>
+<span class="comment"># otherwise merge (see the guide), never overwrite</span>
+<span class="cmd">test</span> <span class="flag">-e</span> <span class="path">/claude-workspace/.claude/settings.json</span> \
+  && <span class="cmd">echo</span> "settings.json exists, merge it" \
+  || <span class="cmd">cp</span> <span class="flag">-R</span> 24x7-setup/.claude <span class="path">/claude-workspace/</span>
 <span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/claude-workspace/</span>*.sh
 <span class="cmd">cd</span> <span class="path">/claude-workspace</span>
 <span class="cmd">./runner-bg.sh</span>

@@ -115,6 +115,44 @@ Nichts. Session sofort beenden.
 """
 }
 
+# ── PreToolUse-Hook: rote Zone ──────────────────────────────
+# Das Muster wird im Hook einfach gequotet, damit Backslashes
+# unveraendert bei grep ankommen. Anfuehrungszeichen schneidet der
+# Hook vor dem grep mit tr aus dem Kommando, deshalb muss das Muster
+# sie nicht kennen und rm -rf "/" blockt genauso wie rm -rf /.
+# Die rm-Regel trifft gefaehrliche Ziele: Wurzel, Home und dessen
+# direkte Kinder, Globs, Elternpfade, Systemordner, .git. Nicht
+# getroffen wird das taegliche Aufraeumen, auch nicht mit absolutem
+# Pfad: "rm -rf node_modules", "rm -rf /Users/ich/projekt/dist",
+# "rm -f *.log" laufen durch.
+BLOCK_PATTERN = (
+    "rm +(-[A-Za-z-]+ +)*("
+    "/( |$)|/\\*/?( |$)|\\*/?( |$)|\\./\\*/?( |$)|\\.\\.|\\./?( |$)|\\.git/?( |$)"
+    "|(~|\\$HOME|/home|/Users|/Volumes|/private)(/[^/ ]+)?/?( |$)"
+    "|/(bin|boot|dev|etc|lib|opt|root|sbin|sys|usr|var"
+    "|Applications|Library|System)( |/|$)"
+    ")"
+    "|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\|.*bash|eval |> /dev/sd"
+)
+
+# Ohne jq kann der Hook nichts pruefen. Dann blockt er und sagt warum,
+# statt still durchzuwinken (fail closed).
+BLOCK_CMD = (
+    "bash -c '"
+    "if ! command -v jq >/dev/null 2>&1; then "
+    'echo "24x7 BLOCKED: jq nicht gefunden, Kommando nicht pruefbar" >&2; exit 2; '
+    "fi; "
+    "INPUT=$(cat); "
+    'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
+    '{ echo "24x7 BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
+    'if [ -n "$CMD" ] && printf "%s" "$CMD" | tr -d "\\047\\042" | grep -qE '
+    "'\\''" + BLOCK_PATTERN + "'\\''; then "
+    'echo "24x7 BLOCKED: Destruktiver Befehl" >&2; exit 2; '
+    "fi; "
+    "exit 0'"
+)
+
+
 SETTINGS = {
     "hooks": {
         "PreToolUse": [
@@ -123,14 +161,7 @@ SETTINGS = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": (
-                            "bash -c '"
-                            'CMD=$(cat | jq -r ".tool_input.command // empty"); '
-                            'if [ -n "$CMD" ] && echo "$CMD" | '
-                            "grep -qE \"rm -rf /|rm -rf ~|rm -rf \\\\\\\\*|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\\\|.*bash|eval |> /dev/sd\"; "
-                            'then echo "24x7 BLOCKED: Destruktiver Befehl" >&2; exit 2; fi; '
-                            "exit 0'"
-                        ),
+                        "command": BLOCK_CMD,
                     }
                 ],
             }
@@ -162,6 +193,21 @@ POLL={POLL_INTERVAL}
 MAX_SECONDS={MAX_TASK_MINUTES * 60}
 IDLE_SECONDS={IDLE_TIMEOUT_MINUTES * 60}
 LOGFILE="/tmp/24x7-$(date +%Y%m%d).log"
+
+# Timeout-Kommando bestimmen. Ohne Timeout laeuft ein haengender Task
+# unbegrenzt weiter, deshalb Abbruch statt stillem Weiterlaufen.
+# macOS bringt kein timeout mit; coreutils installiert es als gtimeout.
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
+else
+    echo "❌ Weder 'timeout' noch 'gtimeout' gefunden."
+    echo "   Der Runner braucht eins von beiden, um Tasks zu deckeln."
+    echo "   macOS: brew install coreutils (liefert gtimeout)"
+    echo "   Linux: Paket coreutils installieren"
+    exit 1
+fi
 
 # PID-Lock: Verhindert doppelten Start
 PIDFILE="/tmp/24x7.pid"
@@ -196,7 +242,7 @@ echo "============================================" | tee -a "$LOGFILE"
 echo "  Claude 24x7 Runner gestartet: $(date)" | tee -a "$LOGFILE"
 echo "  Workspace: $WORKSPACE" | tee -a "$LOGFILE"
 echo "  Poll-Intervall: ${{POLL}}s" | tee -a "$LOGFILE"
-echo "  Task-Timeout: {MAX_TASK_MINUTES} Min" | tee -a "$LOGFILE"
+echo "  Task-Timeout: {MAX_TASK_MINUTES} Min (via $TIMEOUT_BIN)" | tee -a "$LOGFILE"
 echo "  Idle: {IDLE_BEHAVIOR}" | tee -a "$LOGFILE"
 echo "  Log: $LOGFILE" | tee -a "$LOGFILE"
 echo "  PID: $$" | tee -a "$LOGFILE"
@@ -240,7 +286,7 @@ while true; do
 
     # Claude starten mit Timeout
     echo "   ▶ Claude startet..." | tee -a "$LOGFILE"
-    timeout $MAX_SECONDS claude -p \\
+    "$TIMEOUT_BIN" $MAX_SECONDS claude -p \\
       "Du bearbeitest folgenden Task im Ordner $WORKING/$TASK_NAME.
 
 AUFTRAG (aus task.md):
@@ -287,7 +333,7 @@ REGELN:
     cp "$IDLE/idle-tasks.md" "$IDLE_DIR/task.md" 2>/dev/null
 
     if [ -f "$IDLE_DIR/task.md" ] && ! grep -q "Session sofort beenden" "$IDLE_DIR/task.md"; then
-      timeout $IDLE_SECONDS claude -p \\
+      "$TIMEOUT_BIN" $IDLE_SECONDS claude -p \\
         "Du bist im Idle-Modus. Lies $IDLE_DIR/task.md und arbeite die Idle-Aufgaben ab.
 Ergebnisse in $IDLE_DIR/output/ ablegen.
 Workspace-Root ist $WORKSPACE.
@@ -430,8 +476,17 @@ README = f"""# Claude 24x7 — Endless Runner
 ```bash
 # 1. Unzip and install
 unzip 24x7-setup.zip
-cp -r 24x7-setup/* {WORKSPACE}/
-chmod +x {WORKSPACE}/runner.sh {WORKSPACE}/runner-bg.sh {WORKSPACE}/watchdog.sh
+cd {WORKSPACE}
+# The * glob does not match dotfiles, .claude needs its own step
+cp -r /path/to/24x7-setup/* .
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it (see below)"
+else
+  mkdir -p .claude
+  cp -R /path/to/24x7-setup/.claude/. .claude/
+fi
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
+chmod +x runner.sh runner-bg.sh watchdog.sh
 
 # 2. Start
 cd {WORKSPACE}
@@ -439,6 +494,23 @@ cd {WORKSPACE}
 
 # 3. Watchdog (second terminal)
 ./watchdog.sh
+```
+
+## Existing .claude/settings.json
+
+Copying would drop your own hooks, permissions, and MCP settings. Merge instead.
+The command keeps your entries and appends the 24x7 hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {{}}) as $mine | (.[1].hooks // {{}}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({{}}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \\
+  .claude/settings.json /path/to/24x7-setup/.claude/settings.json \\
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ## Drop a Task
@@ -522,34 +594,35 @@ Autonomy zones and error tolerance inspired by [AlpiType — Solving the AI Agen
 #  ZIP BAUEN
 # ════════════════════════════════════════════════════════════
 
-ZIP_PATH = "/mnt/user-data/outputs/24x7-setup.zip"
+if __name__ == "__main__":
+    ZIP_PATH = "/mnt/user-data/outputs/24x7-setup.zip"
 
-idle_content = IDLE_TASKS.get(IDLE_BEHAVIOR, IDLE_TASKS["sleep"])
+    idle_content = IDLE_TASKS.get(IDLE_BEHAVIOR, IDLE_TASKS["sleep"])
 
-files = {
-    "CLAUDE.md": CLAUDE_MD,
-    ".claude/settings.json": json.dumps(SETTINGS, indent=2, ensure_ascii=False),
-    "runner.sh": RUNNER_SH,
-    "runner-bg.sh": RUNNER_BG_SH,
-    "watchdog.sh": WATCHDOG_SH,
-    "sandbox.sb": SANDBOX_SB,
-    "idle/idle-tasks.md": idle_content,
-    "inbox/.gitkeep": "",
-    "working/.gitkeep": "",
-    "outbox/.gitkeep": "",
-    "failed/.gitkeep": "",
-    "inbox/beispiel-task/task.md": EXAMPLE_TASK,
-    "inbox/beispiel-task/materials/.gitkeep": "",
-    "README.md": README,
-}
+    files = {
+        "CLAUDE.md": CLAUDE_MD,
+        ".claude/settings.json": json.dumps(SETTINGS, indent=2, ensure_ascii=False),
+        "runner.sh": RUNNER_SH,
+        "runner-bg.sh": RUNNER_BG_SH,
+        "watchdog.sh": WATCHDOG_SH,
+        "sandbox.sb": SANDBOX_SB,
+        "idle/idle-tasks.md": idle_content,
+        "inbox/.gitkeep": "",
+        "working/.gitkeep": "",
+        "outbox/.gitkeep": "",
+        "failed/.gitkeep": "",
+        "inbox/beispiel-task/task.md": EXAMPLE_TASK,
+        "inbox/beispiel-task/materials/.gitkeep": "",
+        "README.md": README,
+    }
 
-with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
-    for filename, content in files.items():
-        zf.writestr(f"24x7-setup/{filename}", content)
+    with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, content in files.items():
+            zf.writestr(f"24x7-setup/{filename}", content)
 
-print(f"✅ 24x7-setup.zip erstellt: {ZIP_PATH}")
-print(f"   Workspace:      {WORKSPACE}")
-print(f"   Poll-Intervall:  {POLL_INTERVAL}s")
-print(f"   Task-Timeout:    {MAX_TASK_MINUTES} Min")
-print(f"   Idle-Verhalten:  {IDLE_BEHAVIOR}")
-print(f"   Dateien:         {len(files)}")
+    print(f"✅ 24x7-setup.zip erstellt: {ZIP_PATH}")
+    print(f"   Workspace:      {WORKSPACE}")
+    print(f"   Poll-Intervall:  {POLL_INTERVAL}s")
+    print(f"   Task-Timeout:    {MAX_TASK_MINUTES} Min")
+    print(f"   Idle-Verhalten:  {IDLE_BEHAVIOR}")
+    print(f"   Dateien:         {len(files)}")

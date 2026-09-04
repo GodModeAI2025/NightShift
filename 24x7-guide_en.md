@@ -22,7 +22,8 @@ After this guide, you will be able to:
 ## Prerequisites
 
 - [ ] **Claude Code CLI** installed and authenticated
-- [ ] **bash**, **python3**, and **jq** in your PATH
+- [ ] **bash**, **python3** (3.9 or newer), and **jq** in your PATH
+- [ ] **timeout** or **gtimeout** in your PATH. macOS does not ship `timeout`: `brew install coreutils` provides `gtimeout`. Without either, the runner refuses to start.
 - [ ] **macOS** recommended (for sandbox). Linux works without it.
 - [ ] A directory for the workspace (no git required, unlike Nightshift)
 
@@ -205,6 +206,41 @@ Bad tasks are vague: "improve the codebase" or "fix everything". Claude will gue
 ---
 
 ## Lesson 6: Start and Monitor
+
+### Copy the Files Into the Workspace
+
+```bash
+cd /your/workspace
+
+# The * glob does not match dotfiles, so .claude needs its own step
+cp -r /path/to/24x7-setup/* .
+
+# Hook configuration. An existing settings.json is never overwritten.
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it instead of copying (see below)"
+else
+  mkdir -p .claude
+  cp -R /path/to/24x7-setup/.claude/. .claude/
+fi
+
+# Without this file the runner has no hooks at all
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
+```
+
+**If `.claude/settings.json` already exists**, merge instead of copying. The
+command keeps your own entries and appends the 24x7 hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {}) as $mine | (.[1].hooks // {}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \
+  .claude/settings.json /path/to/24x7-setup/.claude/settings.json \
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
+```
 
 ### Start the Runner
 

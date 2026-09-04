@@ -24,7 +24,7 @@ After this guide, you will be able to:
 Before you start, make sure you have:
 
 - [ ] **Claude Code CLI** installed and authenticated (type `claude` in your terminal — if it opens, you're good)
-- [ ] **bash**, **python3**, and **jq** in your PATH
+- [ ] **bash**, **python3** (3.9 or newer), and **jq** in your PATH
 - [ ] **A git repository** with your project (you need git for rollback)
 - [ ] **macOS** recommended (for kernel-level sandbox). Linux works without the sandbox — use Docker instead.
 
@@ -136,12 +136,38 @@ Claude generates these files:
 
 ```bash
 cd /your/project
-cp -r nightshift-setup/.claude .
 cp nightshift-setup/runbook.md .
 cp nightshift-setup/nightshift-*.sh .
 cp nightshift-setup/nightshift-sandbox.sb .
 cat nightshift-setup/CLAUDE-nightshift.md >> CLAUDE.md
 chmod +x nightshift-*.sh
+
+# Hook configuration. An existing settings.json is never overwritten.
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it instead of copying (see below)"
+else
+  mkdir -p .claude
+  cp -R nightshift-setup/.claude/. .claude/
+fi
+
+# Without this file the run has no hooks and no protection layer
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
+```
+
+**If `.claude/settings.json` already exists**, merge instead of copying. The
+command keeps your own hooks, permissions, and MCP settings and appends the
+Nightshift hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {}) as $mine | (.[1].hooks // {}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \
+  .claude/settings.json nightshift-setup/.claude/settings.json \
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ### 4.2 Commit First (Critical!)

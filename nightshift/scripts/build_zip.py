@@ -246,6 +246,44 @@ GENRE_TEMPLATES = {
 #  AB HIER NICHTS ÄNDERN — Dateien generieren
 # ════════════════════════════════════════════════════════════
 
+# ── PreToolUse-Hook: rote Zone ──────────────────────────────
+# Das Muster wird im Hook einfach gequotet, damit Backslashes
+# unveraendert bei grep ankommen. Anfuehrungszeichen schneidet der
+# Hook vor dem grep mit tr aus dem Kommando, deshalb muss das Muster
+# sie nicht kennen und rm -rf "/" blockt genauso wie rm -rf /.
+# Die rm-Regel trifft gefaehrliche Ziele: Wurzel, Home und dessen
+# direkte Kinder, Globs, Elternpfade, Systemordner, .git. Nicht
+# getroffen wird das taegliche Aufraeumen, auch nicht mit absolutem
+# Pfad: "rm -rf node_modules", "rm -rf /Users/ich/projekt/dist",
+# "rm -f *.log" laufen durch.
+BLOCK_PATTERN = (
+    "rm +(-[A-Za-z-]+ +)*("
+    "/( |$)|/\\*/?( |$)|\\*/?( |$)|\\./\\*/?( |$)|\\.\\.|\\./?( |$)|\\.git/?( |$)"
+    "|(~|\\$HOME|/home|/Users|/Volumes|/private)(/[^/ ]+)?/?( |$)"
+    "|/(bin|boot|dev|etc|lib|opt|root|sbin|sys|usr|var"
+    "|Applications|Library|System)( |/|$)"
+    ")"
+    "|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\|.*bash|eval |> /dev/sd"
+)
+
+# Ohne jq kann der Hook nichts pruefen. Dann blockt er und sagt warum,
+# statt still durchzuwinken (fail closed).
+BLOCK_CMD = (
+    "bash -c '"
+    "if ! command -v jq >/dev/null 2>&1; then "
+    'echo "NIGHTSHIFT BLOCKED: jq nicht gefunden, Kommando nicht pruefbar" >&2; exit 2; '
+    "fi; "
+    "INPUT=$(cat); "
+    'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
+    '{ echo "NIGHTSHIFT BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
+    'if [ -n "$CMD" ] && printf "%s" "$CMD" | tr -d "\\047\\042" | grep -qE '
+    "'\\''" + BLOCK_PATTERN + "'\\''; then "
+    'echo "NIGHTSHIFT BLOCKED: Destruktiver Befehl" >&2; exit 2; '
+    "fi; "
+    "exit 0'"
+)
+
+
 SETTINGS = {
     "hooks": {
         "PreToolUse": [
@@ -254,14 +292,7 @@ SETTINGS = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": (
-                            "bash -c '"
-                            'CMD=$(cat | jq -r ".tool_input.command // empty"); '
-                            'if [ -n "$CMD" ] && echo "$CMD" | '
-                            "grep -qE \"rm -rf /|rm -rf ~|rm -rf \\\\\\\\*|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\\\|.*bash|eval |> /dev/sd\"; "
-                            'then echo "NIGHTSHIFT BLOCKED: Destruktiver Befehl" >&2; exit 2; fi; '
-                            "exit 0'"
-                        ),
+                        "command": BLOCK_CMD,
                     }
                 ],
             }
@@ -347,14 +378,18 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 echo $$ > "$PIDFILE"
 
-# Graceful Shutdown
+# Graceful Shutdown, Exit-Code bleibt erhalten
 cleanup() {{
+    RC=${{1:-$?}}
+    trap - EXIT
     echo ""
-    echo "⏹  Nightshift wird beendet... ($(date))"
+    echo "⏹  Nightshift wird beendet (Exit-Code $RC)... ($(date))"
     rm -f "$PIDFILE"
-    exit 0
+    exit "$RC"
 }}
-trap cleanup SIGTERM SIGINT EXIT
+trap 'cleanup 143' SIGTERM
+trap 'cleanup 130' SIGINT
+trap cleanup EXIT
 
 LOGFILE="/tmp/nightshift-$(date +%Y%m%d-%H%M%S).log"
 echo "=== Claude Nightshift Start: $(date) ===" | tee "$LOGFILE"
@@ -376,6 +411,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; th
     echo "⚠️  Uncommitted changes gefunden. Empfehlung: git stash"
 fi
 
+CLAUDE_RC=0
 claude -p \\
   "Lies runbook.md und arbeite alle Punkte sequentiell ab. \\
    Hake jeden erledigten Schritt mit [x] ab. \\
@@ -384,10 +420,15 @@ claude -p \\
    Am Ende: git add -A && git commit -m '{AUFGABE_KURZ}'" \\
   --dangerously-skip-permissions \\
   --output-format stream-json \\
-  2>&1 | tee -a "$LOGFILE"
+  2>&1 | tee -a "$LOGFILE" || CLAUDE_RC=$?
 
 echo ""
-echo "=== Claude Nightshift Ende: $(date) ===" | tee -a "$LOGFILE"
+if [ "$CLAUDE_RC" -eq 0 ]; then
+    echo "=== Claude Nightshift Ende: $(date) ===" | tee -a "$LOGFILE"
+else
+    echo "=== Claude Nightshift ABGEBROCHEN: $(date) (Exit-Code $CLAUDE_RC) ===" | tee -a "$LOGFILE"
+fi
+exit $CLAUDE_RC
 """
 
 RUN_BG_SH = f"""#!/bin/bash
@@ -501,11 +542,19 @@ unzip nightshift-setup.zip
 
 # 2. Copy into project
 cd {PROJEKTPFAD}
-cp -r /path/to/nightshift-setup/.claude .
 cp /path/to/nightshift-setup/runbook.md .
 cp /path/to/nightshift-setup/nightshift-*.sh .
 cp /path/to/nightshift-setup/nightshift-sandbox.sb .
 chmod +x nightshift-*.sh
+
+# 2a. Hook configuration, an existing settings.json is never overwritten
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it (see below)"
+else
+  mkdir -p .claude
+  cp -R /path/to/nightshift-setup/.claude/. .claude/
+fi
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
 
 # 3. Append to CLAUDE.md
 cat /path/to/nightshift-setup/CLAUDE-nightshift.md >> CLAUDE.md
@@ -517,6 +566,23 @@ git add -A && git commit -m "Checkpoint before Nightshift"
 ./nightshift-run.sh                                        # Foreground
 ./nightshift-run-bg.sh                                     # Background
 sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh  # With sandbox
+```
+
+## Existing .claude/settings.json
+
+Copying would drop your own hooks, permissions, and MCP settings. Merge instead.
+The command keeps your entries and appends the Nightshift hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {{}}) as $mine | (.[1].hooks // {{}}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({{}}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \\
+  .claude/settings.json /path/to/nightshift-setup/.claude/settings.json \\
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ## Risk Checks ({GENRE})
@@ -583,4 +649,7 @@ if __name__ == "__main__":
     print(f"   Aufgabe:  {AUFGABE_TITEL}")
     print(f"   Projekt:  {PROJEKTPFAD}")
     print(f"   Dateien:  {len(files)}")
-    print(f"   Schritte: {len(re.findall(r'^- \[ \]', RUNBOOK, re.MULTILINE))}")
+    # Backslashes duerfen bis Python 3.11 nicht im f-String-Ausdruck stehen,
+    # deshalb steht das Muster in einer eigenen Variablen.
+    offene_schritte = len(re.findall(r"^- \[ \]", RUNBOOK, re.MULTILINE))
+    print(f"   Schritte: {offene_schritte}")

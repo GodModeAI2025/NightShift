@@ -527,6 +527,26 @@ kill $(cat /tmp/24x7.pid)
 
 ---
 
+## Roadmap
+
+Ordered by what blocks users today. No dates attached, this is a private project.
+
+**Next**
+
+- **Release assets.** The install commands under [Install the Skills](#install-the-skills) point at `releases/latest/download/nightshift.skill` and `24x7.skill`. There is no release and no tag, so the documented install path returns 404. Packaging both directories and tagging a version needs no code change.
+- **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
+- **Egress control.** The seatbelt profile allows outbound 443 to any host. Restricting it to the Anthropic API is what turns a write boundary into something closer to a real one.
+
+**After that**
+
+- **Linux isolation that holds.** A Docker Compose setup with the project mounted, so the Linux route stops being a user-account workaround.
+- **A cost ceiling that stops a run.** Both runners print a warning at startup and that is the entire mechanism. Nightshift has no timeout at all.
+- **A morning receipt.** One JSON file per run: steps done against steps open, `git diff --stat`, the decisions log, the exit code.
+
+**Test coverage**
+
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, and drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands. The generated shell scripts are only checked for syntax; nothing executes a runner, a watchdog, or the sandbox profile. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+
 ## Acknowledgments
 
 Autonomy zones and error budget inspired by [AlpiType — Solving the AI Agent Approval Loop](https://alpitype.de/insights/ki-agenten-approval-loop/)

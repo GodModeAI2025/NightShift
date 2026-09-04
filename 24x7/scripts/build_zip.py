@@ -595,7 +595,10 @@ Autonomy zones and error tolerance inspired by [AlpiType — Solving the AI Agen
 # ════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    ZIP_PATH = "/mnt/user-data/outputs/24x7-setup.zip"
+    # Zielpfad ueberschreibbar, damit der Generator auch ausserhalb der
+    # Claude-Umgebung schreiben kann (Tests, CI, lokale Laeufe).
+    ZIP_PATH = os.environ.get("CLAUDE_24X7_OUT", "/mnt/user-data/outputs/24x7-setup.zip")
+    os.makedirs(os.path.dirname(ZIP_PATH) or ".", exist_ok=True)
 
     idle_content = IDLE_TASKS.get(IDLE_BEHAVIOR, IDLE_TASKS["sleep"])
 

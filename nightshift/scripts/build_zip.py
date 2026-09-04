@@ -627,7 +627,12 @@ if __name__ == "__main__":
         print(f"\n✅ Validierung: {passed}/{total} — Runbook ist bereit!\n")
 
     # ZIP
-    ZIP_PATH = "/mnt/user-data/outputs/nightshift-setup.zip"
+    # Zielpfad ueberschreibbar, damit der Generator auch ausserhalb der
+    # Claude-Umgebung schreiben kann (Tests, CI, lokale Laeufe).
+    ZIP_PATH = os.environ.get(
+        "NIGHTSHIFT_OUT", "/mnt/user-data/outputs/nightshift-setup.zip"
+    )
+    os.makedirs(os.path.dirname(ZIP_PATH) or ".", exist_ok=True)
 
     files = {
         "runbook.md": RUNBOOK,

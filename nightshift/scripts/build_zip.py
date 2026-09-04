@@ -246,6 +246,24 @@ GENRE_TEMPLATES = {
 #  AB HIER NICHTS ÄNDERN — Dateien generieren
 # ════════════════════════════════════════════════════════════
 
+# ── PreToolUse-Hook: rote Zone ──────────────────────────────
+# Ohne jq kann der Hook nichts pruefen. Dann blockt er und sagt warum,
+# statt still durchzuwinken (fail closed).
+BLOCK_CMD = (
+    "bash -c '"
+    "if ! command -v jq >/dev/null 2>&1; then "
+    'echo "NIGHTSHIFT BLOCKED: jq nicht gefunden, Kommando nicht pruefbar" >&2; exit 2; '
+    "fi; "
+    "INPUT=$(cat); "
+    'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
+    '{ echo "NIGHTSHIFT BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
+    'if [ -n "$CMD" ] && printf "%s" "$CMD" | '
+    "grep -qE \"rm -rf /|rm -rf ~|rm -rf \\\\\\\\*|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\\\|.*bash|eval |> /dev/sd\"; then "
+    'echo "NIGHTSHIFT BLOCKED: Destruktiver Befehl" >&2; exit 2; '
+    "fi; "
+    "exit 0'"
+)
+
 SETTINGS = {
     "hooks": {
         "PreToolUse": [
@@ -254,14 +272,7 @@ SETTINGS = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": (
-                            "bash -c '"
-                            'CMD=$(cat | jq -r ".tool_input.command // empty"); '
-                            'if [ -n "$CMD" ] && echo "$CMD" | '
-                            "grep -qE \"rm -rf /|rm -rf ~|rm -rf \\\\\\\\*|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\\\|.*bash|eval |> /dev/sd\"; "
-                            'then echo "NIGHTSHIFT BLOCKED: Destruktiver Befehl" >&2; exit 2; fi; '
-                            "exit 0'"
-                        ),
+                        "command": BLOCK_CMD,
                     }
                 ],
             }

@@ -56,13 +56,20 @@ Das Flag `--dangerously-skip-permissions` entfernt alle Abfragen. Aber ohne Leit
 
 ## Lektion 2: Skill installieren
 
-Lade den Skill aus dem Repository:
+Lade den Skill aus dem letzten Release:
 
 ```bash
-# Skill-Verzeichnis erstellen
-mkdir -p ~/.claude/skills/nightshift/scripts
+mkdir -p ~/.claude/skills
+curl -LO https://github.com/GodModeAI2025/NightShift/releases/latest/download/nightshift.skill
+unzip nightshift.skill -d ~/.claude/skills/
+```
 
-# Dateien herunterladen
+`nightshift.skill` ist ein ZIP-Archiv. Es entpackt sich nach `~/.claude/skills/nightshift/` mit `SKILL.md`, `scripts/build_zip.py`, der Lizenz und einer `VERSION`.
+
+Wenn der Download 404 liefert, ist noch keine Version getaggt. Dann hol die Dateien direkt aus `main`:
+
+```bash
+mkdir -p ~/.claude/skills/nightshift/scripts
 curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/SKILL.md -o ~/.claude/skills/nightshift/SKILL.md
 curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/scripts/build_zip.py -o ~/.claude/skills/nightshift/scripts/build_zip.py
 ```

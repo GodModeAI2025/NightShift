@@ -47,6 +47,16 @@ Der entscheidende Architekturuntersched: **Nightshift nutzt eine lange Claude-Se
 ## Lektion 2: Skill installieren
 
 ```bash
+mkdir -p ~/.claude/skills
+curl -LO https://github.com/GodModeAI2025/NightShift/releases/latest/download/24x7.skill
+unzip 24x7.skill -d ~/.claude/skills/
+```
+
+`24x7.skill` ist ein ZIP-Archiv. Es entpackt sich nach `~/.claude/skills/24x7/` mit `SKILL.md`, `scripts/build_zip.py`, der Lizenz und einer `VERSION`.
+
+Wenn der Download 404 liefert, ist noch keine Version getaggt. Dann hol die Dateien direkt aus `main`:
+
+```bash
 mkdir -p ~/.claude/skills/24x7/scripts
 
 curl -L https://github.com/GodModeAI2025/NightShift/raw/main/24x7/SKILL.md -o ~/.claude/skills/24x7/SKILL.md

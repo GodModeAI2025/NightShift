@@ -1099,7 +1099,7 @@
         <div class="step-num">1</div>
         <div class="step-content">
           <h4>Install the Skill</h4>
-          <p>There is no release to download yet. Clone the repo and copy the skill directory: <code>cp -r NightShift/nightshift ~/.claude/skills/</code>. This makes the skill available in Claude Code and Claude.ai. You only do this once.</p>
+          <p>Download <code>nightshift.skill</code> from the latest release and unpack it into Claude's skill directory: <code>unzip nightshift.skill -d ~/.claude/skills/</code>. The file is a ZIP archive and unpacks to <code>~/.claude/skills/nightshift/</code>. This makes the skill available in Claude Code and Claude.ai. You only do this once.</p>
         </div>
       </div>
       <div class="step">
@@ -1155,7 +1155,7 @@
         <div class="step-num">1</div>
         <div class="step-content">
           <h4>Install and Generate</h4>
-          <p>Install the skill from a clone of the repo: <code>cp -r NightShift/24x7 ~/.claude/skills/</code>. Then tell Claude: "Set up a 24x7 runner at /my/workspace with idle behavior cleanup". Claude generates the workspace structure with runner, watchdog, hooks, and sandbox.</p>
+          <p>Install the skill from the latest release: <code>unzip 24x7.skill -d ~/.claude/skills/</code>. Then tell Claude: "Set up a 24x7 runner at /my/workspace with idle behavior cleanup". Claude generates the workspace structure with runner, watchdog, hooks, and sandbox.</p>
         </div>
       </div>
       <div class="step">
@@ -1277,9 +1277,9 @@
         <div class="dot g"></div>
         <span>Install and run Nightshift</span>
       </div>
-      <div class="quickstart-body"><span class="comment"># Install skill (no release yet, so clone)</span>
-<span class="cmd">git</span> clone <span class="path">https://github.com/GodModeAI2025/NightShift.git</span>
-<span class="cmd">cp</span> <span class="flag">-r</span> <span class="path">NightShift/nightshift</span> ~/.claude/skills/
+      <div class="quickstart-body"><span class="comment"># Install skill from the latest release</span>
+<span class="cmd">curl</span> <span class="flag">-LO</span> <span class="path">https://github.com/GodModeAI2025/NightShift/releases/latest/download/nightshift.skill</span>
+<span class="cmd">unzip</span> <span class="path">nightshift.skill</span> <span class="flag">-d</span> ~/.claude/skills/
 
 <span class="comment"># Tell Claude:</span>
 <span class="comment"># "Set up a Nightshift run for /my/project</span>
@@ -1316,9 +1316,9 @@
         <div class="dot g"></div>
         <span>Install 24x7 and drop a task</span>
       </div>
-      <div class="quickstart-body"><span class="comment"># Install skill (no release yet, so clone)</span>
-<span class="cmd">git</span> clone <span class="path">https://github.com/GodModeAI2025/NightShift.git</span>
-<span class="cmd">cp</span> <span class="flag">-r</span> <span class="path">NightShift/24x7</span> ~/.claude/skills/
+      <div class="quickstart-body"><span class="comment"># Install skill from the latest release</span>
+<span class="cmd">curl</span> <span class="flag">-LO</span> <span class="path">https://github.com/GodModeAI2025/NightShift/releases/latest/download/24x7.skill</span>
+<span class="cmd">unzip</span> <span class="path">24x7.skill</span> <span class="flag">-d</span> ~/.claude/skills/
 
 <span class="comment"># Tell Claude:</span>
 <span class="comment"># "Set up a 24x7 runner at /claude-workspace"</span>
@@ -1352,7 +1352,7 @@
 <footer class="footer">
   <div class="container">
     <p>Claude Nightshift & 24x7 — Autonomous Skills for Claude Code</p>
-    <p class="version">No tagged release yet · Apache-2.0 License · Compatible with Claude Code CLI · <a href="https://github.com/GodModeAI2025/NightShift" style="color: var(--text-muted); text-decoration: underline;">GitHub</a></p>
+    <p class="version">v1.0.0 · Apache-2.0 License · Compatible with Claude Code CLI · <a href="https://github.com/GodModeAI2025/NightShift" style="color: var(--text-muted); text-decoration: underline;">GitHub</a></p>
     <p style="margin-top: 20px; font-size: 13px; color: #555568;">Autonomy zones and error budget inspired by <a href="https://alpitype.de/insights/ki-agenten-approval-loop/" style="color: var(--text-muted); text-decoration: underline;">AlpiType — Solving the AI Agent Approval Loop</a></p>
     <p style="margin-top: 12px; font-size: 12px; color: #444458; max-width: 600px; margin-left: auto; margin-right: auto;">Disclaimer: This project was created privately, to the best of the author's knowledge. Use at your own risk. No warranty of completeness, correctness, or fitness for any particular purpose.</p>
 

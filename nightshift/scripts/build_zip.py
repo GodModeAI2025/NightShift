@@ -1082,7 +1082,9 @@ if [ -n "$KOSTEN" ] && [ -f "$KOSTEN" ] && command -v jq >/dev/null 2>&1; then
     TOKENS_EIN=$(jq -r '.tokens_ein // "unbekannt"' "$KOSTEN" 2>/dev/null || echo unbekannt)
     TOKENS_AUS=$(jq -r '.tokens_aus // "unbekannt"' "$KOSTEN" 2>/dev/null || echo unbekannt)
     USD=$(jq -r '.usd_geschaetzt // "unbekannt"' "$KOSTEN" 2>/dev/null || echo unbekannt)
-    BUDGET_STOP=$(jq -r '.budget_ueberschritten // "unbekannt"' "$KOSTEN" 2>/dev/null || echo unbekannt)
+    # Nicht "// unbekannt" nehmen: in jq ist false genauso leer wie null,
+    # und ein nicht gerissenes Budget waere damit unbekannt statt false.
+    BUDGET_STOP=$(jq -r 'if has("budget_ueberschritten") then .budget_ueberschritten else "unbekannt" end' "$KOSTEN" 2>/dev/null || echo unbekannt)
 fi
 
 # ── receipt.json ────────────────────────────────────────────

@@ -147,6 +147,8 @@ class LaufTest(unittest.TestCase):
             self.assertEqual(1.75, kosten["usd_gemeldet"])
             self.assertEqual(0, daten["exit_code"])
             self.assertEqual("test", daten["isolation"])
+            # false ist eine Aussage, kein fehlender Wert.
+            self.assertIs(False, daten["kosten"]["budget_stop"])
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
 

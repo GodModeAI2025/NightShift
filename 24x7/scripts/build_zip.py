@@ -522,34 +522,35 @@ Autonomy zones and error tolerance inspired by [AlpiType — Solving the AI Agen
 #  ZIP BAUEN
 # ════════════════════════════════════════════════════════════
 
-ZIP_PATH = "/mnt/user-data/outputs/24x7-setup.zip"
+if __name__ == "__main__":
+    ZIP_PATH = "/mnt/user-data/outputs/24x7-setup.zip"
 
-idle_content = IDLE_TASKS.get(IDLE_BEHAVIOR, IDLE_TASKS["sleep"])
+    idle_content = IDLE_TASKS.get(IDLE_BEHAVIOR, IDLE_TASKS["sleep"])
 
-files = {
-    "CLAUDE.md": CLAUDE_MD,
-    ".claude/settings.json": json.dumps(SETTINGS, indent=2, ensure_ascii=False),
-    "runner.sh": RUNNER_SH,
-    "runner-bg.sh": RUNNER_BG_SH,
-    "watchdog.sh": WATCHDOG_SH,
-    "sandbox.sb": SANDBOX_SB,
-    "idle/idle-tasks.md": idle_content,
-    "inbox/.gitkeep": "",
-    "working/.gitkeep": "",
-    "outbox/.gitkeep": "",
-    "failed/.gitkeep": "",
-    "inbox/beispiel-task/task.md": EXAMPLE_TASK,
-    "inbox/beispiel-task/materials/.gitkeep": "",
-    "README.md": README,
-}
+    files = {
+        "CLAUDE.md": CLAUDE_MD,
+        ".claude/settings.json": json.dumps(SETTINGS, indent=2, ensure_ascii=False),
+        "runner.sh": RUNNER_SH,
+        "runner-bg.sh": RUNNER_BG_SH,
+        "watchdog.sh": WATCHDOG_SH,
+        "sandbox.sb": SANDBOX_SB,
+        "idle/idle-tasks.md": idle_content,
+        "inbox/.gitkeep": "",
+        "working/.gitkeep": "",
+        "outbox/.gitkeep": "",
+        "failed/.gitkeep": "",
+        "inbox/beispiel-task/task.md": EXAMPLE_TASK,
+        "inbox/beispiel-task/materials/.gitkeep": "",
+        "README.md": README,
+    }
 
-with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
-    for filename, content in files.items():
-        zf.writestr(f"24x7-setup/{filename}", content)
+    with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, content in files.items():
+            zf.writestr(f"24x7-setup/{filename}", content)
 
-print(f"✅ 24x7-setup.zip erstellt: {ZIP_PATH}")
-print(f"   Workspace:      {WORKSPACE}")
-print(f"   Poll-Intervall:  {POLL_INTERVAL}s")
-print(f"   Task-Timeout:    {MAX_TASK_MINUTES} Min")
-print(f"   Idle-Verhalten:  {IDLE_BEHAVIOR}")
-print(f"   Dateien:         {len(files)}")
+    print(f"✅ 24x7-setup.zip erstellt: {ZIP_PATH}")
+    print(f"   Workspace:      {WORKSPACE}")
+    print(f"   Poll-Intervall:  {POLL_INTERVAL}s")
+    print(f"   Task-Timeout:    {MAX_TASK_MINUTES} Min")
+    print(f"   Idle-Verhalten:  {IDLE_BEHAVIOR}")
+    print(f"   Dateien:         {len(files)}")

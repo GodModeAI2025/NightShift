@@ -56,5 +56,11 @@ the documented setup fail on a fresh machine.
 - README, the four guides and the landing page described the sandbox, the reach
   of the hooks, Linux support, the runbook validation and the install steps in
   ways the code did not back up. Those passages now match the code.
+- Both `SKILL.md` files told Claude to copy the generator from
+  `/mnt/skills/user/`, a path that exists on claude.ai but not in an
+  installation under `~/.claude/skills/`, and neither one named
+  `NIGHTSHIFT_OUT` or `CLAUDE_24X7_OUT`, so the run wrote to the read-only
+  `/mnt/user-data/outputs/`. The copy step now finds the generator in either
+  place, and the variable list names the output path.
 
 [1.0.0]: https://github.com/GodModeAI2025/NightShift/releases/tag/v1.0.0

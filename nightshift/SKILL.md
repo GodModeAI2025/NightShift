@@ -108,7 +108,11 @@ The validation catches: missing rollback section, vague steps, steps targeting p
 Copy and configure the build script:
 
 ```bash
-cp /mnt/skills/user/nightshift/scripts/build_zip.py /home/claude/build_nightshift.py
+# scripts/build_zip.py sits next to this SKILL.md: under ~/.claude/skills/
+# after installing from the release, under /mnt/skills/user/ on claude.ai.
+SKILL_DIR="$HOME/.claude/skills/nightshift"
+[ -d "$SKILL_DIR" ] || SKILL_DIR="/mnt/skills/user/nightshift"
+cp "$SKILL_DIR/scripts/build_zip.py" ~/build_nightshift.py
 ```
 
 Set variables directly in the script OR pass as environment variables:
@@ -119,9 +123,10 @@ Set variables directly in the script OR pass as environment variables:
 - `STACK_INFO` — detected technologies
 - `GENRE` — selected genre
 - `RUNBOOK` — the validated runbook text (the core content)
+- `NIGHTSHIFT_OUT` — where the ZIP is written. The default `/mnt/user-data/outputs/nightshift-setup.zip` exists on claude.ai only; everywhere else set it, e.g. `NIGHTSHIFT_OUT=~/nightshift-setup.zip python3 ~/build_nightshift.py`
 
 ```bash
-python3 /home/claude/build_nightshift.py
+python3 ~/build_nightshift.py
 ```
 
 ### Step 6: Present output

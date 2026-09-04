@@ -162,13 +162,27 @@ The 24x7 skill uses the same pattern at workspace level: each task reads `decisi
 
 ### Install the Skills
 
-There is no release and no tag yet, so there is no `.skill` file to download. Clone the repo and copy both skill directories:
+Download both skills from the latest release and unpack them into Claude's skill directory:
+
+```bash
+mkdir -p ~/.claude/skills
+curl -LO https://github.com/GodModeAI2025/NightShift/releases/latest/download/nightshift.skill
+curl -LO https://github.com/GodModeAI2025/NightShift/releases/latest/download/24x7.skill
+unzip nightshift.skill -d ~/.claude/skills/
+unzip 24x7.skill -d ~/.claude/skills/
+```
+
+Both files are ZIP archives, `.skill` is only the extension. Each one unpacks into a single directory, `~/.claude/skills/nightshift/` and `~/.claude/skills/24x7/`, containing `SKILL.md`, `scripts/build_zip.py`, the license, and a `VERSION` file naming the release it came from.
+
+The links resolve to the newest tag. As long as no tag exists they return 404. In that case, and whenever you want the current state of `main` rather than a release, clone and copy:
 
 ```bash
 git clone https://github.com/GodModeAI2025/NightShift.git
 mkdir -p ~/.claude/skills
 cp -r NightShift/nightshift NightShift/24x7 ~/.claude/skills/
 ```
+
+The version of a release is in [VERSION](VERSION), what changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ### Verify Installation
 
@@ -529,7 +543,6 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Next**
 
-- **Release assets.** Installing means cloning the repo and copying two directories, because there is no release and no tag. Packaging `nightshift/` and `24x7/` as downloadable assets and tagging a version needs no code change.
 - **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
 - **Egress control.** The seatbelt profile allows outbound 443 to any host. Restricting it to the Anthropic API is what turns a write boundary into something closer to a real one.
 
@@ -541,7 +554,7 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Test coverage**
 
-CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, and drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands. The generated shell scripts are only checked for syntax; nothing executes a runner, a watchdog, or the sandbox profile. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, and builds the release artifacts on every push to check what they do and do not contain. The generated shell scripts are only checked for syntax; nothing executes a runner, a watchdog, or the sandbox profile. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
 ## Acknowledgments
 

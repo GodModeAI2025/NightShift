@@ -56,17 +56,21 @@ The flag `--dangerously-skip-permissions` removes all approval prompts. But with
 
 ## Lesson 2: Install the Skill
 
-Download the skill from the repository:
+Download the skill from the latest release:
 
 ```bash
-# Download the skill definition (there is no .skill release)
-curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/SKILL.md -o /tmp/nightshift-skill.md
+mkdir -p ~/.claude/skills
+curl -LO https://github.com/GodModeAI2025/NightShift/releases/latest/download/nightshift.skill
+unzip nightshift.skill -d ~/.claude/skills/
+```
 
-# Create the skill directory
+`nightshift.skill` is a ZIP archive. It unpacks to `~/.claude/skills/nightshift/` with `SKILL.md`, `scripts/build_zip.py`, the license, and a `VERSION` file.
+
+If the download returns 404, no version has been tagged yet. Take the files from `main` in that case:
+
+```bash
 mkdir -p ~/.claude/skills/nightshift/scripts
-
-# Copy files
-cp /tmp/nightshift-skill.md ~/.claude/skills/nightshift/SKILL.md
+curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/SKILL.md -o ~/.claude/skills/nightshift/SKILL.md
 curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/scripts/build_zip.py -o ~/.claude/skills/nightshift/scripts/build_zip.py
 ```
 

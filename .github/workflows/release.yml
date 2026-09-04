@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  veroeffentlichen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Dieselbe Version wie in ci.yml. Das Artefakt enthaelt build_zip.py,
+      # und das muss unter 3.9 laufen.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      # Die Version steht in VERSION, nicht im Tag. Passt beides nicht
+      # zusammen, bricht der Lauf ab, bevor irgendetwas veroeffentlicht ist.
+      - name: Tag gegen VERSION pruefen
+        run: |
+          erwartet="v$(cat VERSION)"
+          if [ "$GITHUB_REF_NAME" != "$erwartet" ]; then
+            echo "Tag $GITHUB_REF_NAME passt nicht zu VERSION, erwartet $erwartet"
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME passt zu VERSION"
+
+      # Die Packaging-Logik steht im Skript, nicht hier. Genau dieses Skript
+      # laeuft auch in ci.yml bei jedem Push und lokal ohne Netz.
+      - name: Artefakte bauen
+        run: python scripts/build_release.py dist
+
+      - name: Artefakte an das Release haengen
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/nightshift.skill
+            dist/24x7.skill
+          fail_on_unmatched_files: true

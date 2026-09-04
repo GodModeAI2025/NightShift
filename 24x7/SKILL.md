@@ -86,7 +86,11 @@ All work happens inside the task's working directory. Claude reads from material
 Copy and configure the build script:
 
 ```bash
-cp /mnt/skills/user/24x7/scripts/build_zip.py /home/claude/build_24x7.py
+# scripts/build_zip.py sits next to this SKILL.md: under ~/.claude/skills/
+# after installing from the release, under /mnt/skills/user/ on claude.ai.
+SKILL_DIR="$HOME/.claude/skills/24x7"
+[ -d "$SKILL_DIR" ] || SKILL_DIR="/mnt/skills/user/24x7"
+cp "$SKILL_DIR/scripts/build_zip.py" ~/build_24x7.py
 ```
 
 Set variables directly in the script OR pass as environment variables:
@@ -94,9 +98,10 @@ Set variables directly in the script OR pass as environment variables:
 - `IDLE_BEHAVIOR` — cleanup, docs, tests, or sleep
 - `POLL_INTERVAL` — seconds between inbox checks (default 30)
 - `MAX_TASK_MINUTES` — timeout per task (default 60)
+- `CLAUDE_24X7_OUT` — where the ZIP is written. The default `/mnt/user-data/outputs/24x7-setup.zip` exists on claude.ai only; everywhere else set it, e.g. `CLAUDE_24X7_OUT=~/24x7-setup.zip python3 ~/build_24x7.py`
 
 ```bash
-python3 /home/claude/build_24x7.py
+python3 ~/build_24x7.py
 ```
 
 ### Step 4: Present output

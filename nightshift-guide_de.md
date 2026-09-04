@@ -26,7 +26,8 @@ Stelle sicher, dass du folgendes hast:
 - [ ] **Claude Code CLI** installiert und authentifiziert (tippe `claude` im Terminal)
 - [ ] **bash**, **python3** (mindestens 3.9) und **jq** im PATH
 - [ ] **Ein Git-Repository** mit deinem Projekt (für Rollback)
-- [ ] **macOS** empfohlen (für Kernel-Level-Sandbox). Linux funktioniert ohne Sandbox — nutze stattdessen Docker.
+- [ ] **Docker** mit Compose v2 fuer den Standardlauf. Gilt auf Linux und macOS gleichermassen. Dazu ein `ANTHROPIC_API_KEY`, weil der Container ein eigenes Home hat.
+- [ ] Optional **macOS** mit `sandbox-exec`, falls kein Docker da ist.
 
 ---
 
@@ -184,10 +185,19 @@ Das ist dein Undo-Button. Ohne diesen Commit gibt es kein Zurück.
 
 ### 4.3 Starten
 
-**Mit Sandbox (empfohlen auf macOS):**
+**Im Container (Standardweg):**
 ```bash
-sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+export ANTHROPIC_API_KEY=sk-ant-...
+./nightshift-docker.sh
 ```
+Baut beide Images, mountet nur das Projekt nach `/project`, laesst die Nacht laufen und raeumt danach auf. Budget: 25 USD, per `NIGHTSHIFT_BUDGET_USD=5 ./nightshift-docker.sh` fuer einen Lauf anders.
+
+**Mit Seatbelt-Profil (macOS-Option):**
+```bash
+NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+```
+
+Ein blosses `./nightshift-run.sh` bricht mit Exit-Code 3 ab. Wer bewusst ohne Isolation laufen will, setzt `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`.
 
 **Im Hintergrund (Terminal kann geschlossen werden):**
 ```bash
@@ -250,10 +260,13 @@ pkill -f "claude.*dangerously"
 ## Lektion 6: Worauf du achten musst
 
 ### API-Kosten
-Jeder Headless-Run verbraucht API-Credits. Ein typischer Overnight-Run kostet $5–50 je nach Komplexität. Überwache unter console.anthropic.com.
+Jeder Headless-Run verbraucht API-Credits. Nightshift zaehlt sie mit: `nightshift-cost.sh` summiert die usage-Felder aus der stream-json-Ausgabe, schaetzt die Dollar aus einer datierten Preistabelle und beendet den Lauf am Budget mit Exit-Code 9. Die Zahl im Receipt ist eine Schaetzung, die Rechnung steht unter console.anthropic.com.
 
-### Sandbox muss explizit aktiviert werden
-Die Sandbox-Datei existiert, aber du musst mit `sandbox-exec -f ...` starten um sie zu aktivieren. Ohne sie hat Claude vollen Zugriff auf dein Benutzerkonto.
+### Der Lauf ohne Isolation bricht ab
+`nightshift-run.sh` prueft vor dem Claude-Aufruf, wie es eingesperrt ist: Container, Seatbelt oder nichts. Bei nichts endet der Lauf mit Exit-Code 3. `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` ist der bewusste Weg daran vorbei.
+
+### Der Morning Receipt
+Nach jedem Lauf liegen `nightshift-receipts/<lauf>/receipt.json` und `receipt.md` im Projekt, auch nach einem Abbruch. Was der Lauf nicht ermitteln konnte, steht dort als `unbekannt` und nicht als 0.
 
 ### Runbook-Qualität = Ergebnis-Qualität
 Vage Schritte erzeugen vage Ergebnisse. Prüfe das Runbook vor dem Start. Bei mehr als 20 Schritten auf mehrere Runs aufteilen.
@@ -262,14 +275,18 @@ Vage Schritte erzeugen vage Ergebnisse. Prüfe das Runbook vor dem Start. Bei me
 Bei Runs über 20 Minuten passiert Kontextkomprimierung. Die Hooks fangen das ab, aber bei 30+ Schritten sinkt die Qualität. Unter 20 Schritte pro Run bleiben.
 
 ### Linux-Nutzer
-`sandbox-exec` gibt es nur auf macOS. Docker mit gemountetem Projekt ist der Weg, der eine durchgesetzte Grenze liefert. Ein eigener Benutzer schraenkt nur die Dateirechte ein und braucht drei Schritte mehr:
+`sandbox-exec` gibt es nur auf macOS, und gebraucht wird es nicht mehr: `./nightshift-docker.sh` ist auf beiden Systemen derselbe Weg und die schaerfere Grenze, weil auch Lesezugriffe und der Netzverkehr eingeschraenkt sind.
+
+Ohne Docker bleibt ein eigener Benutzer als schwaechere Notloesung:
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /dein/projekt /home/clauderunner/projekt
 sudo chown -R clauderunner: /home/clauderunner/projekt
-sudo -u clauderunner /home/clauderunner/projekt/nightshift-run.sh
+sudo -u clauderunner env NIGHTSHIFT_PROJEKT=/home/clauderunner/projekt \
+    NIGHTSHIFT_ALLOW_UNSANDBOXED=1 \
+    bash /home/clauderunner/projekt/nightshift-run.sh
 ```
-Die Kopie aus `sudo cp -r` gehoert sonst root, und der Runner kann in seinem eigenen Arbeitsverzeichnis nicht schreiben. Ausserdem steht im erzeugten `nightshift-run.sh` ein fester `cd` auf den Pfad, der beim Generieren gesetzt war: das Setup mit `NIGHTSHIFT_PROJECT=/home/clauderunner/projekt` neu erzeugen, sonst laeuft der Run wieder im Originalverzeichnis. Das neue Konto braucht eine eigene Claude-Code-Anmeldung.
+Die Kopie aus `sudo cp -r` gehoert sonst root, und der Runner kann in seinem eigenen Arbeitsverzeichnis nicht schreiben. `NIGHTSHIFT_PROJEKT` schiebt den Lauf in die Kopie, sonst arbeitet er im Originalverzeichnis weiter. Das neue Konto braucht eine eigene Claude-Code-Anmeldung. Das Konto erreicht weiterhin das Netz und liest alles, was fuer alle lesbar ist, deshalb der ausdrueckliche Opt-out.
 
 ---
 

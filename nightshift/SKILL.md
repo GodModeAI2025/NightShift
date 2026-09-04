@@ -1,13 +1,13 @@
 ---
 name: nightshift
 license: Apache-2.0
-compatibility: "Requires Claude Code CLI (claude -p), bash, python3 >= 3.9, jq. macOS recommended for sandbox-exec."
-description: "Generates a complete autonomous Claude Code setup as ZIP from a project path and task description. Includes a validated runbook with genre templates, security hooks, heartbeat watchdog, and macOS sandbox profile. Use this skill whenever someone wants to run Claude Code autonomously, overnight, or unattended. Also use for headless Claude Code, dangerously-skip-permissions setup, autonomous agent runs, or batch project work. Trigger phrases: Nachtlauf, Nightshift, autonom arbeiten, über Nacht, YOLO mode einrichten, Claude absichern, Runbook erstellen."
+compatibility: "Requires Claude Code CLI (claude -p), bash, python3 >= 3.9, jq. Docker with Compose v2 for the default isolated run; sandbox-exec is the macOS option."
+description: "Generates a complete autonomous Claude Code setup as ZIP from a project path and task description. Includes a validated runbook with genre templates, security hooks, heartbeat watchdog, a container setup with an egress allowlist, a token budget with a hard stop, and a morning receipt. Use this skill whenever someone wants to run Claude Code autonomously, overnight, or unattended. Also use for headless Claude Code, dangerously-skip-permissions setup, autonomous agent runs, or batch project work. Trigger phrases: Nachtlauf, Nightshift, autonom arbeiten, über Nacht, YOLO mode einrichten, Claude absichern, Runbook erstellen."
 ---
 
 # Claude Nightshift
 
-Generates a complete autonomous Claude Code setup as ZIP — validated runbook, security hooks, heartbeat watchdog, and optional macOS sandbox. The user provides a project path and a task description; the skill produces everything needed to let Claude Code work unattended.
+Generates a complete autonomous Claude Code setup as ZIP — validated runbook, security hooks, heartbeat watchdog, a Docker Compose setup that fences the run, a cost governor that stops it at a budget, and a receipt in the morning. The user provides a project path and a task description; the skill produces everything needed to let Claude Code work unattended.
 
 ## Why this exists
 
@@ -124,6 +124,8 @@ Set variables directly in the script OR pass as environment variables:
 - `GENRE` — selected genre
 - `RUNBOOK` — the validated runbook text (the core content)
 - `NIGHTSHIFT_OUT` — where the ZIP is written. The default `/mnt/user-data/outputs/nightshift-setup.zip` exists on claude.ai only; everywhere else set it, e.g. `NIGHTSHIFT_OUT=~/nightshift-setup.zip python3 ~/build_nightshift.py`
+- `NIGHTSHIFT_BUDGET_USD` — dollar ceiling of a run, default 25.00. The runner reads the same variable at run time, so a single night can be cheaper or dearer without regenerating the setup.
+- `NIGHTSHIFT_BUDGET_TOKENS` — additional token ceiling, 0 means none.
 
 ```bash
 python3 ~/build_nightshift.py
@@ -143,8 +145,13 @@ The ZIP contains:
 |------|---------|
 | runbook.md | Task plan with checkboxes — Claude's external memory |
 | .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat), SessionStart (compact recovery), Stop (checkpoint + stall detection) |
-| nightshift-run.sh | Main script: headless mode + skip-permissions + PID lock + graceful shutdown |
+| nightshift-run.sh | Main script: isolation check, headless mode + skip-permissions, PID lock, graceful shutdown, receipt from the exit trap |
 | nightshift-run-bg.sh | Background starter (nohup) |
+| nightshift-docker.sh | Builds the images and runs the night in the container |
+| Dockerfile | Two targets: runner with Claude Code, egress with a tinyproxy allowlist |
+| docker-compose.yml | Project as the only host mount, internal network, read-only root, dropped capabilities |
+| nightshift-cost.sh | Counts tokens from the stream-json output, estimates the cost, stops the run at the budget |
+| nightshift-receipt.sh | Writes receipt.json and receipt.md per run, also after a crash |
 | nightshift-watchdog.sh | Heartbeat monitor with macOS notification support |
 | nightshift-sandbox.sb | macOS sandbox profile: restricts writes to project + /tmp. Reads outside the project and outbound traffic on 443 stay open. |
 | CLAUDE-nightshift.md | Append to CLAUDE.md for project conventions + run memory |
@@ -175,7 +182,9 @@ The Stop hook tracks progress between checks. If the number of completed runbook
 
 - PreToolUse hook blocks a fixed list of command patterns: rm against dangerous targets (root, home and its direct children, globs, parent paths, .git, system directories), mkfs, dd writing to a device, sudo, chmod 777, curl piped into bash, eval. Fork bombs are not on that list, there is no pattern for them.
 - The hook carries `"matcher": "Bash"` and greps the command text, so Write and Edit never reach it. It is a typo catcher, not a boundary. See [SECURITY.md](../SECURITY.md).
-- Sandbox profile restricts writes to project directory + /tmp at kernel level. Reads outside the project and outbound network traffic are not restricted.
+- The container is the default fence: only the project is mounted, the home directory lives in a volume, and the sole route outward is a proxy that allows api.anthropic.com and answers everything else with 403.
+- Sandbox profile restricts writes to project directory + /tmp at kernel level. Reads outside the project and outbound network traffic are not restricted. It is the macOS option, not the default.
+- The runner aborts with exit code 3 when it finds neither. `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` is the documented way out; tell the user what it costs.
 - PID lock prevents duplicate runner instances
-- Always recommend sandbox; warn when using skip-permissions without it
-- Cost warning displayed at runner startup — headless runs consume API credits without supervision
+- Cost governor: tokens are counted, the dollar figure is estimated from a dated price table, and the run is stopped at the budget with exit code 9. The estimate is an estimate; the invoice is the Anthropic dashboard.
+- Every run leaves nightshift-receipts/<run>/receipt.json and receipt.md. Fields the run could not determine read "unbekannt", never 0.

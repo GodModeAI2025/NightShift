@@ -1059,10 +1059,11 @@
     </div>
 
     <div class="layer-detail">
-      <h4><span class="badge">Layer 3</span> macOS Sandbox — Kernel-Level Isolation</h4>
-      <p>A <code>sandbox-exec</code> profile restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and /tmp. Even if Claude tries <code>rm -rf ~/</code>, the kernel blocks it, without the hook having to catch it.</p>
+      <h4><span class="badge">Layer 3</span> Isolation — Container by Default (Nightshift)</h4>
+      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. 24x7 does not have this yet.</p>
+      <p style="margin-top: 12px;">The <code>sandbox-exec</code> profile remains the macOS option. It restricts Claude's filesystem writes at the kernel level: Claude can only write to the project directory and /tmp, and <code>rm -rf ~/</code> fails without the hook having to catch it.</p>
       <p style="margin-top: 12px;">What the profile does not restrict: reads and network traffic. It grants <code>file-read*</code> on <code>$HOME/.claude</code> and <code>$HOME/.config</code>, and it allows outbound TCP on port 443 to any host. Your other projects' transcripts sit in the first directory, CLI tokens commonly in the second. Anything the run can read, it can also send. Call it a write boundary, not a security boundary. The <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a> has the threat model.</p>
-      <p style="margin-top: 12px;"><strong>Important:</strong> The sandbox is not active by default. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to everything your user account can reach. On Linux, use Docker or a dedicated user account instead.</p>
+      <p style="margin-top: 12px;"><strong>Important:</strong> the seatbelt profile is a file, not a state. It only applies when you start with <code>NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh</code>. The container path (<code>./nightshift-docker.sh</code>) needs no such discipline and is the same route on Linux and macOS.</p>
     </div>
 
     <div class="layer-detail">
@@ -1127,7 +1128,7 @@
         <div class="step-num">5</div>
         <div class="step-content">
           <h4>Start the Run</h4>
-          <p>For maximum safety: <code>sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh</code>. For background operation (terminal can be closed): <code>./nightshift-run-bg.sh</code>. The PID lock prevents accidental double starts. A cost warning is displayed — this run uses API credits.</p>
+          <p>The default: <code>./nightshift-docker.sh</code> with an <code>ANTHROPIC_API_KEY</code> in the environment. For background operation on the host (terminal can be closed): <code>./nightshift-run-bg.sh</code>. The PID lock prevents accidental double starts. The run is measured and stops at 25 USD, adjustable with <code>NIGHTSHIFT_BUDGET_USD</code>.</p>
         </div>
       </div>
       <div class="step">
@@ -1199,7 +1200,7 @@
 
     <div class="warning">
       <h4>API Costs</h4>
-      <p>Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. A Nightshift run might cost $5–50 depending on complexity. A 24x7 runner generates continuous costs. Monitor your usage at console.anthropic.com. For 24x7, set idle to "sleep" if cost is a concern — this prevents Claude from burning credits when no tasks are waiting.</p>
+      <p>Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. Nightshift counts them: the tokens from the <code>stream-json</code> stream are summed, the dollars estimated from a dated price table, and the run is stopped at the budget with exit code 9. The figure in the receipt is an estimate, the invoice is at console.anthropic.com. 24x7 has none of this — set idle to "sleep" there if cost is a concern, so Claude does not burn credits while the inbox is empty.</p>
     </div>
 
     <div class="warning">
@@ -1218,8 +1219,8 @@
     </div>
 
     <div class="warning">
-      <h4>macOS Only for Sandbox</h4>
-      <p><code>sandbox-exec</code> is a macOS-only feature (deprecated but functional). On Linux, run Claude inside a Docker container with mounted volumes. A dedicated user account is the weaker fallback, and the short recipe that used to stand in the README does not work: the copy made with <code>sudo cp -r</code> belongs to root, and the generated <code>nightshift-run.sh</code> carries a hardcoded <code>cd</code> into the directory that was set when the setup was generated. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec">README</a> has the corrected steps. The hooks and watchdog work on any platform, only the kernel-level sandbox is macOS-specific.</p>
+      <h4>Docker Is the Route on Both Systems</h4>
+      <p><code>sandbox-exec</code> is macOS-only and deprecated by Apple, which is why Nightshift no longer builds on it. <code>./nightshift-docker.sh</code> runs the same way on Linux and macOS and is the sharper boundary, because reads and outbound traffic are fenced as well. A dedicated user account remains the weaker fallback without Docker, and it needs <code>NIGHTSHIFT_PROJEKT</code> so the run works in the copy rather than in the original directory, plus <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code>, because permission scoping is not isolation. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec-and-does-not-need-it">README</a> has the steps. 24x7 still has no isolation check and no container files.</p>
     </div>
 
     <div class="warning">
@@ -1249,9 +1250,9 @@
         <p>The runner scripts are bash. The build script is Python and needs version 3.9 or newer. Hooks use jq to parse JSON. All three must be in your PATH. The 24x7 runner additionally needs <code>timeout</code> or <code>gtimeout</code> — macOS ships neither, <code>brew install coreutils</code> provides <code>gtimeout</code>.</p>
       </div>
       <div class="problem-card" style="border-top: 2px solid var(--accent-green);">
-        <div class="problem-icon">🍎</div>
-        <h3>macOS (recommended)</h3>
-        <p>For <code>sandbox-exec</code> kernel-level isolation. Works on Linux without the sandbox — use Docker or a dedicated user instead.</p>
+        <div class="problem-icon">🐳</div>
+        <h3>Docker with Compose v2</h3>
+        <p>For the default Nightshift run, the same on Linux and macOS. The container needs an <code>ANTHROPIC_API_KEY</code>, because it has its own home and does not see an OAuth login on the host. Without Docker: the macOS <code>sandbox-exec</code> option, or the explicit opt-out.</p>
       </div>
       <div class="problem-card" style="border-top: 2px solid var(--accent-green);">
         <div class="problem-icon">📁</div>
@@ -1299,11 +1300,15 @@
 <span class="comment"># IMPORTANT: commit first!</span>
 <span class="cmd">git</span> add -A && <span class="cmd">git</span> commit <span class="flag">-m</span> <span class="path">"Checkpoint before Nightshift"</span>
 
-<span class="comment"># Start with sandbox (recommended)</span>
-<span class="cmd">sandbox-exec</span> <span class="flag">-f</span> nightshift-sandbox.sb <span class="cmd">./nightshift-run.sh</span>
+<span class="comment"># Start in the container (the default)</span>
+<span class="cmd">export</span> ANTHROPIC_API_KEY=sk-ant-...
+<span class="cmd">./nightshift-docker.sh</span>
 
-<span class="comment"># Or background (terminal can be closed)</span>
-<span class="cmd">./nightshift-run-bg.sh</span>
+<span class="comment"># Or the macOS option</span>
+NIGHTSHIFT_SANDBOXED=seatbelt <span class="cmd">sandbox-exec</span> <span class="flag">-f</span> nightshift-sandbox.sb <span class="cmd">./nightshift-run.sh</span>
+
+<span class="comment"># In the morning: the receipt</span>
+<span class="cmd">cat</span> <span class="path">nightshift-receipts/</span>*/receipt.md
 
 <span class="comment"># Monitor in second terminal</span>
 <span class="cmd">./nightshift-watchdog.sh</span></div>
@@ -1365,4 +1370,10 @@
         <a href="/cdn-cgi/l/email-protection#2556464d4c43437a5655574c515f4c424057124f654c46494a50410b464a48" style="color: var(--text-muted);"><span class="__cf_email__" data-cfemail="b7c4d4dfded1d1e8c4c7c5dec3cdded0d2c580ddf7ded4dbd8c2d399d4d8da">[email&#160;protected]</span></a>
       </p>
       <p style="font-size: 12px; color: #555568; margin-top: 12px; line-height: 1.7;">Responsible for content (§ 18 Abs. 2 MStV): Mark Zimmermann. All repositories are private, non-commercial, community-driven projects. No liability for use, correctness, or fitness for purpose.</p>
-      <p style="margin-top: 10px;"><a href="https://godmodeai2025.github.io/MarkZimmerma
+      <p style="margin-top: 10px; font-size: 12px;"><a href="https://github.com/GodModeAI2025" style="color: var(--text-muted); text-decoration: underline;">More projects by the author</a></p>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,5 +1,7 @@
 # Nightshift & 24x7 — Autonomous Claude Code Skills
 
+[![CI](https://github.com/GodModeAI2025/NightShift/actions/workflows/ci.yml/badge.svg)](https://github.com/GodModeAI2025/NightShift/actions/workflows/ci.yml)
+
 Two skills that turn Claude Code from an interactive tool into an autonomous worker. Nightshift runs planned project work overnight. 24x7 runs an endless task queue.
 
 **Landing page:** [godmodeai2025.github.io/NightShift](https://godmodeai2025.github.io/NightShift/)

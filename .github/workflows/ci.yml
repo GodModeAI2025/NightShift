@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 ist die dokumentierte Untergrenze und das System-Python von macOS.
+      # Eine neuere Version wuerde genau die Syntaxfehler durchwinken, an denen
+      # Nutzer mit dem System-Python haengen bleiben.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Generatoren unter Python 3.9 kompilieren
+        run: python -m py_compile nightshift/scripts/build_zip.py 24x7/scripts/build_zip.py
+
+      - name: Generatoren ausfuehren und ZIP-Inhalt pruefen
+        run: python -m unittest discover -s tests -p 'test_generatoren.py' -v
+
+      - name: Blockmuster des PreToolUse-Hooks pruefen
+        run: python -m unittest discover -s tests -p 'test_block_muster.py' -v

@@ -10,6 +10,127 @@ workflow refuses to publish when the tag and `VERSION` disagree, and CI checks
 that this file and the landing page footer name the same version. A release is
 cut by tagging `v` plus the content of `VERSION`.
 
+## [Unreleased]
+
+Nightshift only. 24x7 keeps the state of 1.0.0: no isolation check, no
+measurement, no receipt.
+
+### Added
+
+- `Dockerfile` and `docker-compose.yml` in the generated Nightshift setup,
+  plus `nightshift-docker.sh` to build and run it. The container mounts the
+  project as `/project` and nothing else from the host; the home directory
+  lives in a named volume, so `~/.claude` of the host stays outside. The
+  runner hangs in an internal network whose only bridge outward is a tinyproxy
+  with an allowlist: `api.anthropic.com` passes, everything else gets a 403.
+  Root filesystem read-only, all capabilities dropped, `no-new-privileges`,
+  non-root user in both images.
+- Isolation detection in `nightshift-run.sh`: `docker`, `seatbelt` or `keine`.
+  Without isolation the run ends with exit code 3;
+  `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` is the documented way past it. The state
+  ends up in the receipt. It is measured, not declared — see the entry under
+  Fixed.
+- `nightshift-cost.sh`: reads the `stream-json` output, sums the `usage`
+  fields per model, estimates the dollars from a price table dated
+  2026-06-24, and writes a running total. At `NIGHTSHIFT_BUDGET_USD`
+  (default 25.00) or `NIGHTSHIFT_BUDGET_TOKENS` it terminates Claude's
+  process group, and the run ends with exit code 9. Without `jq` or with an
+  unknown format it measures nothing and lets the run continue.
+- `nightshift-receipt.sh`: writes `nightshift-receipts/<run>/receipt.json`
+  and `receipt.md` from the exit trap, so a crashed run leaves one too. Steps
+  done against steps open including the list of open ones, `git diff
+  --shortstat`, commit, exit code, isolation, tokens, estimated cost,
+  decisions and stall warnings. Fields the run could not determine read
+  `"unbekannt"`, never `0` or `null`.
+- Tests `tests/test_isolation.py` and `tests/test_kosten_receipt.py`, both in
+  CI. They drive `nightshift-run.sh` against a Claude stub, so the abort
+  without isolation, the budget stop and the receipt are checked without an
+  API call. Validating the generated `docker-compose.yml` needs a Compose
+  command and is skipped without one.
+
+- A "Related Projects" section in the README that places
+  `moinsen-dev/NightShift`: an independent reimplementation, not a fork, no
+  code moved in either direction, therefore no `NOTICE`. It names what that
+  implementation does better (`shared/` module, longer blocklist) and where
+  its cost tracker does not hold: `CLAUDE_PID` is never assigned, `grep -oP`
+  fails on macOS, the sums live in a subshell. Checked against the repository
+  on 2026-09-04.
+
+### Changed
+
+- `nightshift-run.sh` takes the project path from `NIGHTSHIFT_PROJEKT` and
+  falls back to the path from generation time. Without this the container
+  would `cd` into the host path, which does not exist there.
+- The `sandbox-exec` profile is documented as the macOS option instead of the
+  recommendation. The documented invocation is the bare `sandbox-exec -f
+  nightshift-sandbox.sb ./nightshift-run.sh`; the runner recognises it from a
+  probe instead of an environment variable.
+- The Linux recipe with a dedicated user account works now: it passes
+  `NIGHTSHIFT_PROJEKT` and the explicit opt-out. It stays documented as
+  permission scoping, not isolation.
+
+### Fixed
+
+- **The generated command line was rejected by Claude Code.** `claude -p
+  ... --output-format stream-json` without `--verbose` ends with "When using
+  --print, --output-format=stream-json requires --verbose" and exit 1 on
+  2.1.261. No run started, so budget stop and receipt were only ever proven
+  against a stub. `--verbose` is now part of the call in both generators, and
+  a run against the real API confirms the field names the counter reads:
+  `message.usage.input_tokens` / `output_tokens` and `type: "result"`.
+- **The isolation gate was self-declared.** Any value in
+  `NIGHTSHIFT_SANDBOXED` passed: `=banane` ran on a bare macOS shell with
+  `--dangerously-skip-permissions` and wrote `isolation: banane` into the
+  receipt. The runner now probes — `/.dockerenv`, `/run/.containerenv`,
+  `/proc/1/cgroup` or an overlay root for the container; an unreadable
+  `/Users` next to a readable project for the seatbelt profile. The variable
+  is a cross-check: if it disagrees with the measurement, the run ends with
+  exit code 3. The tests no longer switch isolation on through it.
+- **The seatbelt profile started no program at all.** On Darwin 27,
+  `sandbox-exec -f nightshift-sandbox.sb /bin/echo hi` ended with SIGABRT:
+  deny-by-default reads exclude the dyld cache on current macOS, and
+  `/dev/null` was not writable either. The profile keeps the write fence and
+  the home-directory fence, opens reads, and grants the usual devices.
+- **A run the counter could not read appeared as a measured zero.** With `jq`
+  present and output that is not `stream-json`, the awk END block wrote
+  `status: gemessen`, 0 tokens and 0.0000 USD, and `receipt.md` printed
+  "0.0000 USD (Status: gemessen)" right above its own note that costs may be
+  unknown. Zero usage events now write the unknown state, and the receipt
+  prints "unbekannt (Status: unbekannt)". The gap in the test suite is
+  closed: the case with `jq` present is covered too.
+- **The budget stop did not reliably end the run.** `pkill -P` reaches only
+  direct children; a reparented process holding the pipe descriptor kept
+  runner and `tee` alive for a measured 2:33 min. Claude starts in its own
+  process group (`set -m`) and the counter uses `kill -- -PGID`. After the
+  stop marker the runner also enforces a hard deadline
+  (`NIGHTSHIFT_STOPFRIST`, 30 s). Measured after the change: the run ends 4 s
+  after the stop, with no orphan left.
+- **The documented way to end a run had no effect.** `kill $PID` from
+  `nightshift-run-bg.sh` and from the PID-lock message left runner and
+  `claude --dangerously-skip-permissions` running — measured 19 s later, both
+  still alive — because the EXIT trap fires only after the foreground
+  pipeline. The pipeline now runs in the background and the runner waits on
+  it, so the SIGTERM/SIGINT trap fires immediately; it kills Claude's process
+  group first and writes the receipt afterwards. Claude's stdin is redirected
+  from `/dev/null` along with it: a background process group reading from the
+  terminal would stop on SIGTTIN. Measured on a pseudo-terminal, this version
+  does not read stdin in `-p` mode; the redirect takes the case out anyway.
+- **The price-table fallback underestimated.** `claude-fable-5-1` with 1M
+  tokens each way came to 30.00 USD instead of 60.00, `claude-sonnet-4-6` to
+  12.00 instead of 18.00. The table now knows `fable` and `mythos` (10/50)
+  and splits `sonnet-4-6` (3/15) from `sonnet` (2/10), first match wins; an
+  unknown name costs twice the most expensive known row, because a model
+  released after the table's date can be dearer than everything in it.
+- **The cost estimate undercounted cached input by 37 percent.** One factor
+  of 1.25 covered both cache durations. A real run estimated at 0.1637 USD
+  where Claude reported 0.25863. Five-minute cache writes now count 1.25x,
+  one-hour writes 2x, and unattributed cache creation counts at the dearer
+  rate. The same run now estimates 0.25860 USD.
+- `index.html` was truncated mid-attribute in the impressum link, so the last
+  paragraph, `</footer>`, `</body>` and `</html>` were missing from the live
+  landing page. The dangling link target could not be reconstructed and was
+  replaced by a link to the author's GitHub account.
+
 ## [1.0.0] - 2026-09-04
 
 First tagged release. Both skills have been installable from a clone for a

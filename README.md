@@ -48,10 +48,15 @@ Claude Code hooks are scripts that fire on specific events:
 
 Hooks fire even with `--dangerously-skip-permissions`. A `PreToolUse` hook returning exit code 2 blocks the tool call unconditionally.
 
-**Layer 3: macOS Sandbox (Kernel-Level Isolation)**
-A `sandbox-exec` profile that restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and `/tmp`. Even if Claude tries `rm -rf ~/`, the kernel blocks it, without the hook having to catch it. This is the only layer a kernel enforces, and it enforces writes: reads outside the project and outbound network traffic stay open. See [What the Sandbox Does Not Cover](#what-the-sandbox-does-not-cover) and [SECURITY.md](SECURITY.md).
+**Layer 3: Isolation (Container by Default)**
+Nightshift generates a `Dockerfile` and a `docker-compose.yml`. The container mounts the project as `/project` and nothing else from the host — no home directory, no `~/.claude`, no neighbouring projects. Outbound traffic runs through a proxy that only lets `api.anthropic.com` through and answers everything else with 403. `nightshift-run.sh` refuses to start when it finds neither a container nor a sandbox profile; `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` is the deliberate way out.
 
-Note: `sandbox-exec` is deprecated by Apple but still functional on current macOS versions. It uses Seatbelt, a kernel-level sandbox framework.
+The `sandbox-exec` profile stays as the macOS option. It restricts writes at the kernel level: Claude can only write to the project directory and `/tmp`, and `rm -rf ~/` fails without the hook having to catch it. What it does not restrict is reads outside the project and outbound traffic. Apple has deprecated `sandbox-exec`; it still works on current macOS versions. See [What the Sandbox Does Not Cover](#what-the-sandbox-does-not-cover) and [SECURITY.md](SECURITY.md).
+
+24x7 has neither of the two yet. Its runner still starts without any isolation check and its setup contains no container files.
+
+**Layer 3b: Cost Governor (Nightshift)**
+`nightshift-cost.sh` reads Claude's `stream-json` output, adds up the `usage` fields per model and estimates the dollar figure from a dated price table. When the estimate passes the budget, it terminates Claude's whole process group — a grandchild that outlived the parent used to keep the pipe open and the run hanging — and the run ends with exit code 9. Without `jq`, and equally when the stream carries no `usage` events at all, it measures nothing, says `unbekannt` and lets the run continue — a broken counter must not kill a working night, and it must not report a zero it never measured.
 
 **Layer 4: Watchdog (Liveness Monitoring)**
 A separate script that checks the heartbeat file. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm — either a macOS notification or a message you can hook into your own alerting system.
@@ -157,7 +162,8 @@ The 24x7 skill uses the same pattern at workspace level: each task reads `decisi
 - **Claude Code CLI** installed and authenticated (`claude` command available)
 - **bash**, **python3 3.9 or newer**, **jq** in your PATH (the build scripts are tested against the macOS system Python 3.9)
 - **timeout** or **gtimeout** for 24x7 only. macOS does not ship `timeout`; `brew install coreutils` provides `gtimeout`. The runner uses whichever it finds and refuses to start without one.
-- **macOS** recommended (for `sandbox-exec`). Works on Linux without the sandbox layer.
+- **Docker** with **Docker Compose v2** for the Nightshift default path. Same on Linux and macOS. Without Docker the run needs `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` or the macOS `sandbox-exec` option.
+- An **ANTHROPIC_API_KEY** for the container path. The container has its own home and does not see an OAuth login on the host.
 - A **git repository** for your project (Nightshift) or any directory (24x7)
 
 ### Install the Skills
@@ -260,19 +266,30 @@ git add -A && git commit -m "Checkpoint before Nightshift"
 
 ### Step 4: Start
 
-**Foreground** (you see the output):
+**In the container** (the default):
 ```bash
-./nightshift-run.sh
+export ANTHROPIC_API_KEY=sk-ant-...
+./nightshift-docker.sh
 ```
 
-**Background** (terminal can be closed):
-```bash
-./nightshift-run-bg.sh
-```
+Builds both images, mounts the project as `/project`, runs the night, tears the containers down again. The budget defaults to 25 USD; `NIGHTSHIFT_BUDGET_USD=5 ./nightshift-docker.sh` changes it for one run.
 
-**With macOS sandbox** (recommended):
+**With the macOS sandbox** (option):
 ```bash
 sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+```
+
+No environment variable is involved. The runner probes whether it is fenced: under the profile it can list the project but not `/Users`, and that is what earns the `seatbelt` state.
+
+**Without isolation** (aborts unless you say so):
+```bash
+./nightshift-run.sh                                 # exit code 3
+NIGHTSHIFT_ALLOW_UNSANDBOXED=1 ./nightshift-run.sh  # runs, on your head
+```
+
+**Background** (host, terminal can be closed):
+```bash
+./nightshift-run-bg.sh
 ```
 
 ### Step 5: Monitor (Optional)
@@ -285,6 +302,17 @@ In a second terminal:
 ```
 
 ### Step 6: Check Results in the Morning
+
+Every run writes a receipt, including a run that crashed:
+
+```bash
+cat nightshift-receipts/*/receipt.md     # Steps, diff, cost, isolation, exit code
+cat nightshift-receipts/*/receipt.json   # Same thing, machine readable
+```
+
+Fields the run could not determine read `"unbekannt"`, never `0` or `null`. Cost stays unknown when `jq` is missing or the output format changed; isolation stays unknown when the run had none.
+
+The raw material is still there if you want it:
 
 ```bash
 git log --oneline -5            # See the commit
@@ -420,46 +448,72 @@ Configure by editing `idle/idle-tasks.md` or setting the idle behavior when gene
 
 ### API Costs
 
-Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. An overnight Nightshift run might cost $5-50 depending on task complexity. A 24x7 runner generates continuous costs.
+Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. A 24x7 runner generates continuous costs.
 
-- Monitor your usage at [console.anthropic.com](https://console.anthropic.com)
-- For 24x7: set idle to `sleep` if cost is a concern — this prevents Claude from burning credits when no tasks are waiting
-- Both runners show a cost warning at startup
-
-### The Sandbox Is Not Installed by Default
-
-The generated `sandbox.sb` / `nightshift-sandbox.sb` file is just a profile. You must explicitly use it:
+Nightshift measures and stops. The counter sums the `usage` fields of the `stream-json` stream and estimates the dollars from a price table with a date on it; at the budget it kills Claude's process group. On a real run against the API the estimate came out at 0.25860 USD against the 0.25863 USD Claude reported for the same request. A model the table does not know is billed at twice the most expensive known row, because a newer model can be dearer than anything in the table. The number in `receipt.json` is still an estimate, not an invoice — the invoice is at [console.anthropic.com](https://console.anthropic.com), and prices move.
 
 ```bash
-sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+NIGHTSHIFT_BUDGET_USD=5 ./nightshift-docker.sh          # dollar ceiling, default 25
+NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh    # additional token ceiling
 ```
 
-Without `sandbox-exec`, Claude has full access to everything your user account can reach. The `PreToolUse` hook greps the command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
+24x7 has none of this. It prints a warning at startup and that is the whole mechanism. Set idle to `sleep` there if cost is a concern, so Claude does not burn credits while the inbox is empty.
+
+### Nightshift Refuses to Run Without Isolation
+
+`nightshift-run.sh` measures how it is fenced before it calls Claude. It measures — it does not ask:
+
+| State | How it is reached | How it is verified | Exit |
+|---|---|---|---|
+| `docker` | `./nightshift-docker.sh`, or any container | `/.dockerenv`, `/run/.containerenv`, `/proc/1/cgroup`, or an overlay root | runs |
+| `seatbelt` | `sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh` | the runner can list the project but not `/Users`; the profile denies that read | runs |
+| `keine` | plain `./nightshift-run.sh` | neither probe answered | exit code 3 |
+
+`NIGHTSHIFT_SANDBOXED` used to be the whole check, and any word passed it: `NIGHTSHIFT_SANDBOXED=banane` ran on a bare macOS shell with `--dangerously-skip-permissions` and wrote `isolation: banane` into the receipt. It is now a cross-check only. Set it, and if it disagrees with the measurement the run aborts with exit code 3; it grants nothing.
+
+`NIGHTSHIFT_ALLOW_UNSANDBOXED=1` runs anyway, and the receipt then says `keine` — never a word somebody typed. The state ends up in the receipt, so afterwards you can tell how a given night was fenced.
+
+Isolation is not the same as the hook. The `PreToolUse` hook greps command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
+
+24x7 does not have this check. Its runner starts under any conditions.
 
 ### What the Sandbox Does Not Cover
 
-The sandbox is the only layer that a kernel enforces, and what it enforces is writes. It restricts neither reads nor network traffic. The generated profile grants `file-read*` on `$HOME/.claude` and `$HOME/.config`, and it allows `(allow network-outbound (remote tcp "*:443"))` without a destination. `~/.claude` holds the transcripts of your other projects, `~/.config` commonly holds CLI tokens. Anything the run can read, it can also send.
+The sandbox is the only layer that a kernel enforces, and what it enforces is writes. It restricts neither reads nor network traffic. The generated profile allows `file-read*` broadly, denies `/Users` and `/home` and then re-grants `$HOME/.claude`, `$HOME/.config` and the other tool directories, and it allows `(allow network-outbound (remote tcp "*:443"))` without a destination. `~/.claude` holds the transcripts of your other projects, `~/.config` commonly holds CLI tokens. Anything the run can read, it can also send.
+
+Reads are open on purpose, and it is a concession, not a design goal: a profile that allowed only the handful of paths this one used to list no longer starts any program on current macOS. Measured on Darwin 27, `sandbox-exec -f nightshift-sandbox.sb /bin/echo hi` ended with SIGABRT — the dyld cache sits outside that list. A profile under which nothing runs protects nobody, so the profile now keeps the write fence and the home-directory fence and gives up the read fence it never actually delivered.
 
 Calling the sandbox a security boundary is only accurate for writes to the filesystem. [SECURITY.md](SECURITY.md) has the threat model, the trust boundaries, and the list of known gaps.
 
-### Linux Has No sandbox-exec
+### Linux Has No sandbox-exec, and Does Not Need It
 
-Docker with the project mounted is the route that gives you an enforced boundary. A dedicated user account scopes file access with Unix permissions, which is weaker and takes more than three lines:
+The container is the Linux route, and it is the same route on macOS:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+./nightshift-docker.sh
+```
+
+What the container gives you that the seatbelt profile does not: reads are fenced too, because nothing but the project is mounted, and outbound traffic is fenced, because the runner hangs in an internal network whose only bridge is a proxy with an allowlist. What it costs: Docker, a build of about a gigabyte, and an API key in the environment rather than an OAuth login on the host.
+
+The dedicated user account remains a weaker fallback for machines without Docker:
 
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /your/project /home/clauderunner/project
 sudo chown -R clauderunner: /home/clauderunner/project
-sudo -u clauderunner /home/clauderunner/project/nightshift-run.sh
+sudo -u clauderunner env NIGHTSHIFT_PROJEKT=/home/clauderunner/project \
+    NIGHTSHIFT_ALLOW_UNSANDBOXED=1 \
+    bash /home/clauderunner/project/nightshift-run.sh
 ```
 
 Three things about that recipe:
 
 - The copy that `sudo cp -r` creates belongs to root. Without the `chown`, the runner account cannot write in its own working copy.
-- `nightshift-run.sh` starts with a `cd` to the path that was set when the setup was generated. Regenerate the setup with `NIGHTSHIFT_PROJECT=/home/clauderunner/project`, otherwise the run leaves the new account and works in the original directory.
+- `NIGHTSHIFT_PROJEKT` moves the run into the copy. Without it the script uses the path from generation time and works in the original directory.
 - The new account has no Claude Code credentials. Authenticate as that user once before the first run.
 
-Even then the account reaches the network and can read every world-readable file on the machine. This is permission scoping, not isolation.
+Even then the account reaches the network and can read every world-readable file on the machine. That is why the run needs `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`: this is permission scoping, not isolation.
 
 ### Git Is Your Undo Button (Nightshift)
 
@@ -515,10 +569,15 @@ kill $(cat /tmp/24x7.pid)
 |------|---------|
 | `runbook.md` | Task plan with checkboxes, autonomy zones, error budget |
 | `.claude/settings.json` | All hooks: PreToolUse, PostToolUse, SessionStart, Stop |
-| `nightshift-run.sh` | Main script: `claude -p` + `--dangerously-skip-permissions` + PID lock + graceful shutdown |
+| `nightshift-run.sh` | Main script: isolation check, `claude -p` + `--dangerously-skip-permissions`, PID lock, graceful shutdown, receipt from the exit trap |
 | `nightshift-run-bg.sh` | Background wrapper using `nohup` |
+| `nightshift-docker.sh` | Builds the images and runs the night in the container |
+| `Dockerfile` | Two targets: `runner` with Claude Code, `egress` with the allowlist proxy |
+| `docker-compose.yml` | Project as the only host mount, internal network, read-only root, dropped capabilities |
+| `nightshift-cost.sh` | Token counter and budget stop, reads the `stream-json` stream |
+| `nightshift-receipt.sh` | Writes `receipt.json` and `receipt.md` per run |
 | `nightshift-watchdog.sh` | Heartbeat monitor with configurable timeout |
-| `nightshift-sandbox.sb` | macOS sandbox profile (Seatbelt) |
+| `nightshift-sandbox.sb` | macOS sandbox profile (Seatbelt), the option next to the container |
 | `CLAUDE-nightshift.md` | Conventions + run memory (decisions.md) to append to CLAUDE.md |
 | `README-nightshift.md` | Quick reference for the generated setup |
 
@@ -543,18 +602,42 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Next**
 
+- **The same three things for 24x7.** Container, budget and receipt exist for Nightshift only. The 24x7 runner still starts without an isolation check, measures nothing and leaves a `log.md` per task instead of a report.
 - **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
-- **Egress control.** The seatbelt profile allows outbound 443 to any host. Restricting it to the Anthropic API is what turns a write boundary into something closer to a real one.
+- **Egress control for the seatbelt path.** The container has an allowlist proxy; the seatbelt profile still allows outbound 443 to any host.
 
 **After that**
 
-- **Linux isolation that holds.** A Docker Compose setup with the project mounted, so the Linux route stops being a user-account workaround.
-- **A cost ceiling that stops a run.** Both runners print a warning at startup and that is the entire mechanism. Nightshift has no timeout at all.
-- **A morning receipt.** One JSON file per run: steps done against steps open, `git diff --stat`, the decisions log, the exit code.
+- **SpecForge tasks.md as a runbook source.** See [Related Projects](#related-projects). The validation checks German section headings and the three zones, so this needs a converter, not a new entry in the genre table.
+- **A restart policy.** The watchdog reports and never restarts. A restart after a budget stop must stay blocked.
+
+**Done in the meantime**
+
+- Container isolation as the default for Nightshift, with the run refusing to start unfenced.
+- A cost governor that measures first and then stops, with the tokens in the receipt.
+- A morning receipt as JSON and Markdown, written from the exit trap so a crashed run has one too.
 
 **Test coverage**
 
-CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, and builds the release artifacts on every push to check what they do and do not contain. The generated shell scripts are only checked for syntax; nothing executes a runner, a watchdog, or the sandbox profile. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, validates the generated `docker-compose.yml`, runs `nightshift-run.sh` against a Claude stub for the isolation check, the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+
+## Related Projects
+
+### moinsen-dev/NightShift
+
+[moinsen-dev/NightShift](https://github.com/moinsen-dev/NightShift) is an independent reimplementation of the same idea, not a fork. GitHub reports no fork relationship, and the two repositories share no history. Its `plugins/nightshift/.claude-plugin/plugin.json` names `GodModeAI` as the author and this repository as its home, so the lineage is acknowledged from that side. It ships under the plugin name `nightshift` at version 2.0.0, which is worth knowing before you install both.
+
+No code moved in either direction. Nothing here is derived from that repository, so there is no `NOTICE` file to go with it; if anything is ever taken from there, Apache-2.0 section 4 applies and the attribution comes with it.
+
+Where the two differ, as of 2026-09-04:
+
+- **It has a `shared/` module, this one does not.** Both generators here still carry the hook block, the sandbox profile and the watchdog twice. That duplication is real and it is ours.
+- **Its blocklist is longer.** Fork bombs, force-push and a strict mode are on it. The hook here has no fork-bomb pattern; `nightshift/SKILL.md` says so in the Security section.
+- **Its cost tracker cannot stop a run.** In `plugins/nightshift/scripts/shared/cost_tracker.py`, `CLAUDE_PID` appears exactly once, in the `kill` on line 33, and is never assigned; the budget query uses `grep -oP`, which BSD grep on macOS rejects; and the sums live in the subshell of a pipeline. The counter here writes its state to a file, gets the PID from the runner and kills the process group — `kill -- -PGID` against a group the runner opens with `set -m`, which is what actually reaches a grandchild that outlived its parent — and the budget stop is checked in CI against a stub with exactly such a grandchild. Measuring is the easy half — stopping is the half that has to work.
+- **Its zone enforcement has the same gap as ours.** `matcher: "Bash"` on both sides, blocked paths matched against command text on both sides. A `Write` or `Edit` outside the project passes in either implementation.
+- **What is only here:** tests and CI, a tagged release with artifacts, a SECURITY.md, the landing page, and container isolation with an egress allowlist plus a receipt that says what a night cost.
+
+The intended distinguishing feature is executing a `tasks.md` produced by [SpecForge](https://github.com/GodModeAI2025/specforge-ai-skill) as an unattended night. That is not implemented. The 15-point validation expects German section headings and the three autonomy zones, so a SpecForge `tasks.md` fails it by construction; this needs a converter and a second validation path, not another entry in the genre table. It is in the [Roadmap](#roadmap) as such, and it is a plan, not a feature.
 
 ## Acknowledgments
 

@@ -29,6 +29,18 @@ jobs:
       - name: Blockmuster des PreToolUse-Hooks pruefen
         run: python -m unittest discover -s tests -p 'test_block_muster.py' -v
 
+      # Prueft das erzeugte Dockerfile und die Compose-Datei und laesst den
+      # Runner ohne Isolation gegen einen Stub laufen: er muss abbrechen.
+      # Der Lauf im Container selbst passiert hier nicht, der braucht
+      # Bauzeit und ein Netz.
+      - name: Isolation des erzeugten Setups pruefen
+        run: python -m unittest discover -s tests -p 'test_isolation.py' -v
+
+      # Kostenzaehler und Receipt laufen gegen einen claude-Stub, es
+      # entsteht kein API-Aufruf und keine Rechnung.
+      - name: Kostenbudget und Morning Receipt pruefen
+        run: python -m unittest discover -s tests -p 'test_kosten_receipt.py' -v
+
       # Baut dieselben Artefakte, die der Release-Workflow an ein Tag haengt,
       # und schaut hinein. Ein kaputtes Paket faellt so vor dem Tag auf.
       - name: Release-Artefakte bauen und Inhalt pruefen

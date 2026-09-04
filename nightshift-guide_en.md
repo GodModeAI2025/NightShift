@@ -26,7 +26,8 @@ Before you start, make sure you have:
 - [ ] **Claude Code CLI** installed and authenticated (type `claude` in your terminal — if it opens, you're good)
 - [ ] **bash**, **python3** (3.9 or newer), and **jq** in your PATH
 - [ ] **A git repository** with your project (you need git for rollback)
-- [ ] **macOS** recommended (for kernel-level sandbox). Linux works without the sandbox — use Docker instead.
+- [ ] **Docker** with Compose v2 for the default run. Same on Linux and macOS. Plus an `ANTHROPIC_API_KEY`, because the container has its own home.
+- [ ] Optionally **macOS** with `sandbox-exec`, if Docker is not available.
 
 ---
 
@@ -184,10 +185,21 @@ This is your undo button. Without it, there is no rollback.
 
 ### 4.3 Start
 
-**With sandbox (recommended on macOS):**
+**In the container (the default):**
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+./nightshift-docker.sh
+```
+Builds both images, mounts only the project as `/project`, runs the night, tears the containers down. Budget: 25 USD, `NIGHTSHIFT_BUDGET_USD=5 ./nightshift-docker.sh` for a single run.
+
+**With the seatbelt profile (macOS option):**
 ```bash
 sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
 ```
+
+No environment variable is involved: the runner probes whether it really sits behind the profile. Under the profile it can list the project but not `/Users`, and that is what produces the `seatbelt` state.
+
+A plain `./nightshift-run.sh` aborts with exit code 3. To run without isolation on purpose, set `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`; the receipt then says `keine`. `NIGHTSHIFT_SANDBOXED` is a cross-check only: if its value disagrees with the measurement, the run aborts with 3. Any word at all used to be enough to pass this check.
 
 **Background (terminal can be closed):**
 ```bash
@@ -250,10 +262,13 @@ pkill -f "claude.*dangerously"
 ## Lesson 6: What to Watch Out For
 
 ### API Costs
-Every headless run consumes API credits. A typical overnight run costs $5–50 depending on complexity. Monitor at console.anthropic.com.
+Every headless run consumes API credits. Nightshift counts them: `nightshift-cost.sh` sums the usage fields from the stream-json output, estimates the dollars from a dated price table and at the budget kills Claude's process group with exit code 9. Measured against a real run, the estimate came to 0.25860 USD where Claude itself reported 0.25863 USD for the same request. A model the table does not know is billed at twice the most expensive known row — a newer model can cost more than anything in the table. If the stream carries no usage events at all, a changed output format for instance, the counter writes `unbekannt` and not a zero. The figure in the receipt remains an estimate; the invoice is at console.anthropic.com.
 
-### The Sandbox Must Be Activated Explicitly
-The sandbox file exists, but you must start with `sandbox-exec -f ...` to activate it. Without it, Claude has full access to your user account.
+### A Run Without Isolation Aborts
+`nightshift-run.sh` checks how it is fenced before it calls Claude: container, seatbelt or nothing. On nothing, the run ends with exit code 3. `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` is the deliberate way past it.
+
+### The Morning Receipt
+After every run, `nightshift-receipts/<run>/receipt.json` and `receipt.md` sit in the project, including after a crash. Fields the run could not determine read `unbekannt`, not 0.
 
 ### Runbook Quality = Result Quality
 Vague steps produce vague results. Review the runbook before starting. If you need more than 20 steps, split into multiple runs.
@@ -262,14 +277,18 @@ Vague steps produce vague results. Review the runbook before starting. If you ne
 On runs longer than 20 minutes, context compression happens. The hooks handle it, but for 30+ step runbooks, quality degrades. Stay under 20 steps per run.
 
 ### Linux Users
-`sandbox-exec` is macOS only. Docker with the project mounted is the route that gives you an enforced boundary. A dedicated user account only scopes file permissions and needs three more steps:
+`sandbox-exec` is macOS only, and it is no longer needed: `./nightshift-docker.sh` is the same route on both systems and the sharper boundary, because reads and outbound traffic are fenced too.
+
+Without Docker, a dedicated user account remains the weaker fallback:
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /your/project /home/clauderunner/project
 sudo chown -R clauderunner: /home/clauderunner/project
-sudo -u clauderunner /home/clauderunner/project/nightshift-run.sh
+sudo -u clauderunner env NIGHTSHIFT_PROJEKT=/home/clauderunner/project \
+    NIGHTSHIFT_ALLOW_UNSANDBOXED=1 \
+    bash /home/clauderunner/project/nightshift-run.sh
 ```
-Without the `chown`, the copy belongs to root and the runner cannot write in its own working directory. The generated `nightshift-run.sh` also carries a hardcoded `cd` to the path set at generation time, so regenerate the setup with `NIGHTSHIFT_PROJECT=/home/clauderunner/project` or the run lands back in the original directory. The new account needs its own Claude Code login.
+Without the `chown`, the copy belongs to root and the runner cannot write in its own working directory. `NIGHTSHIFT_PROJEKT` moves the run into the copy; without it, the run lands back in the original directory. The new account needs its own Claude Code login. It still reaches the network and reads every world-readable file, which is why the run needs the explicit opt-out.
 
 ---
 

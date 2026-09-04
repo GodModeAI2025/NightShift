@@ -372,14 +372,18 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 echo $$ > "$PIDFILE"
 
-# Graceful Shutdown
+# Graceful Shutdown, Exit-Code bleibt erhalten
 cleanup() {{
+    RC=${{1:-$?}}
+    trap - EXIT
     echo ""
-    echo "⏹  Nightshift wird beendet... ($(date))"
+    echo "⏹  Nightshift wird beendet (Exit-Code $RC)... ($(date))"
     rm -f "$PIDFILE"
-    exit 0
+    exit "$RC"
 }}
-trap cleanup SIGTERM SIGINT EXIT
+trap 'cleanup 143' SIGTERM
+trap 'cleanup 130' SIGINT
+trap cleanup EXIT
 
 LOGFILE="/tmp/nightshift-$(date +%Y%m%d-%H%M%S).log"
 echo "=== Claude Nightshift Start: $(date) ===" | tee "$LOGFILE"
@@ -401,6 +405,7 @@ if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; th
     echo "⚠️  Uncommitted changes gefunden. Empfehlung: git stash"
 fi
 
+CLAUDE_RC=0
 claude -p \\
   "Lies runbook.md und arbeite alle Punkte sequentiell ab. \\
    Hake jeden erledigten Schritt mit [x] ab. \\
@@ -409,10 +414,15 @@ claude -p \\
    Am Ende: git add -A && git commit -m '{AUFGABE_KURZ}'" \\
   --dangerously-skip-permissions \\
   --output-format stream-json \\
-  2>&1 | tee -a "$LOGFILE"
+  2>&1 | tee -a "$LOGFILE" || CLAUDE_RC=$?
 
 echo ""
-echo "=== Claude Nightshift Ende: $(date) ===" | tee -a "$LOGFILE"
+if [ "$CLAUDE_RC" -eq 0 ]; then
+    echo "=== Claude Nightshift Ende: $(date) ===" | tee -a "$LOGFILE"
+else
+    echo "=== Claude Nightshift ABGEBROCHEN: $(date) (Exit-Code $CLAUDE_RC) ===" | tee -a "$LOGFILE"
+fi
+exit $CLAUDE_RC
 """
 
 RUN_BG_SH = f"""#!/bin/bash

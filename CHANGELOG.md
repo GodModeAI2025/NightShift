@@ -35,8 +35,10 @@ the documented setup fail on a fresh machine.
 
 ### Fixed
 
-- Both generators used syntax that needs Python 3.10 and crashed on the macOS
-  system Python 3.9 that the documentation names as the minimum.
+- The Nightshift generator carried a backslash inside an f-string expression.
+  That parses only from Python 3.12 on, so on the macOS system Python 3.9 the
+  documentation names as the minimum, the file was a syntax error before it ran
+  a single line.
 - The `PreToolUse` hook let every command through when `jq` was missing. It now
   blocks instead of waving things past.
 - The hook's `rm` rule fired on harmless commands such as
@@ -48,8 +50,9 @@ the documented setup fail on a fresh machine.
 - The documented install step copied the setup without `.claude/`, so the run
   started with no hooks at all. An existing `.claude/settings.json` is no
   longer overwritten.
-- The 24x7 generator built its ZIP at import time, which made it impossible to
-  read the module without producing a file.
+- The 24x7 generator built its ZIP at import time and wrote it to a fixed path,
+  so every import and every test hit a `FileNotFoundError`. The Nightshift
+  generator already had the `__main__` guard.
 - README, the four guides and the landing page described the sandbox, the reach
   of the hooks, Linux support, the runbook validation and the install steps in
   ways the code did not back up. Those passages now match the code.

@@ -116,6 +116,19 @@ Nichts. Session sofort beenden.
 }
 
 # ── PreToolUse-Hook: rote Zone ──────────────────────────────
+# Das Muster wird im Hook einfach gequotet, damit Backslashes
+# unveraendert bei grep ankommen. Die rm-Regel trifft gefaehrliche
+# Ziele (Wurzel, Home, Globs, Elternpfade, Systemordner, .git),
+# nicht jedes rm -rf: "rm -rf node_modules" bleibt erlaubt.
+BLOCK_PATTERN = (
+    "rm +(-[A-Za-z-]+ +)*("
+    "/( |$)|/\\*|~|\\$HOME|\\*|\\.\\.|\\./\\*|\\.( |$)|\\.git( |/|$)"
+    "|/(bin|boot|dev|etc|home|lib|opt|private|root|sbin|sys|usr|var"
+    "|Applications|Library|System|Users|Volumes)( |/|$)"
+    ")"
+    "|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\|.*bash|eval |> /dev/sd"
+)
+
 # Ohne jq kann der Hook nichts pruefen. Dann blockt er und sagt warum,
 # statt still durchzuwinken (fail closed).
 BLOCK_CMD = (
@@ -126,12 +139,13 @@ BLOCK_CMD = (
     "INPUT=$(cat); "
     'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
     '{ echo "24x7 BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
-    'if [ -n "$CMD" ] && printf "%s" "$CMD" | '
-    "grep -qE \"rm -rf /|rm -rf ~|rm -rf \\\\\\\\*|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\\\|.*bash|eval |> /dev/sd\"; then "
+    'if [ -n "$CMD" ] && printf "%s" "$CMD" | grep -qE '
+    "'\\''" + BLOCK_PATTERN + "'\\''; then "
     'echo "24x7 BLOCKED: Destruktiver Befehl" >&2; exit 2; '
     "fi; "
     "exit 0'"
 )
+
 
 SETTINGS = {
     "hooks": {

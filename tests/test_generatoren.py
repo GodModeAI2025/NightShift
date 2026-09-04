@@ -16,7 +16,12 @@ import helfer
 NIGHTSHIFT_DATEIEN = {
     "nightshift-setup/.claude/settings.json",
     "nightshift-setup/CLAUDE-nightshift.md",
+    "nightshift-setup/Dockerfile",
     "nightshift-setup/README-nightshift.md",
+    "nightshift-setup/docker-compose.yml",
+    "nightshift-setup/nightshift-cost.sh",
+    "nightshift-setup/nightshift-docker.sh",
+    "nightshift-setup/nightshift-receipt.sh",
     "nightshift-setup/nightshift-run-bg.sh",
     "nightshift-setup/nightshift-run.sh",
     "nightshift-setup/nightshift-sandbox.sb",

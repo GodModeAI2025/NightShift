@@ -248,11 +248,14 @@ GENRE_TEMPLATES = {
 
 # ── PreToolUse-Hook: rote Zone ──────────────────────────────
 # Das Muster wird im Hook einfach gequotet, damit Backslashes
-# unveraendert bei grep ankommen. Die rm-Regel trifft gefaehrliche
-# Ziele: Wurzel, Home und dessen direkte Kinder, Globs, Elternpfade,
-# Systemordner, .git. Nicht getroffen wird das taegliche Aufraeumen,
-# auch nicht mit absolutem Pfad: "rm -rf node_modules",
-# "rm -rf /Users/ich/projekt/dist", "rm -f *.log" laufen durch.
+# unveraendert bei grep ankommen. Anfuehrungszeichen schneidet der
+# Hook vor dem grep mit tr aus dem Kommando, deshalb muss das Muster
+# sie nicht kennen und rm -rf "/" blockt genauso wie rm -rf /.
+# Die rm-Regel trifft gefaehrliche Ziele: Wurzel, Home und dessen
+# direkte Kinder, Globs, Elternpfade, Systemordner, .git. Nicht
+# getroffen wird das taegliche Aufraeumen, auch nicht mit absolutem
+# Pfad: "rm -rf node_modules", "rm -rf /Users/ich/projekt/dist",
+# "rm -f *.log" laufen durch.
 BLOCK_PATTERN = (
     "rm +(-[A-Za-z-]+ +)*("
     "/( |$)|/\\*/?( |$)|\\*/?( |$)|\\./\\*/?( |$)|\\.\\.|\\./?( |$)|\\.git/?( |$)"
@@ -273,7 +276,7 @@ BLOCK_CMD = (
     "INPUT=$(cat); "
     'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
     '{ echo "NIGHTSHIFT BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
-    'if [ -n "$CMD" ] && printf "%s" "$CMD" | grep -qE '
+    'if [ -n "$CMD" ] && printf "%s" "$CMD" | tr -d "\\047\\042" | grep -qE '
     "'\\''" + BLOCK_PATTERN + "'\\''; then "
     'echo "NIGHTSHIFT BLOCKED: Destruktiver Befehl" >&2; exit 2; '
     "fi; "

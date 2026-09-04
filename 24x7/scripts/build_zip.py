@@ -118,13 +118,16 @@ Nichts. Session sofort beenden.
 # ── PreToolUse-Hook: rote Zone ──────────────────────────────
 # Das Muster wird im Hook einfach gequotet, damit Backslashes
 # unveraendert bei grep ankommen. Die rm-Regel trifft gefaehrliche
-# Ziele (Wurzel, Home, Globs, Elternpfade, Systemordner, .git),
-# nicht jedes rm -rf: "rm -rf node_modules" bleibt erlaubt.
+# Ziele: Wurzel, Home und dessen direkte Kinder, Globs, Elternpfade,
+# Systemordner, .git. Nicht getroffen wird das taegliche Aufraeumen,
+# auch nicht mit absolutem Pfad: "rm -rf node_modules",
+# "rm -rf /Users/ich/projekt/dist", "rm -f *.log" laufen durch.
 BLOCK_PATTERN = (
     "rm +(-[A-Za-z-]+ +)*("
-    "/( |$)|/\\*|~|\\$HOME|\\*|\\.\\.|\\./\\*|\\.( |$)|\\.git( |/|$)"
-    "|/(bin|boot|dev|etc|home|lib|opt|private|root|sbin|sys|usr|var"
-    "|Applications|Library|System|Users|Volumes)( |/|$)"
+    "/( |$)|/\\*/?( |$)|\\*/?( |$)|\\./\\*/?( |$)|\\.\\.|\\./?( |$)|\\.git/?( |$)"
+    "|(~|\\$HOME|/home|/Users|/Volumes|/private)(/[^/ ]+)?/?( |$)"
+    "|/(bin|boot|dev|etc|lib|opt|root|sbin|sys|usr|var"
+    "|Applications|Library|System)( |/|$)"
     ")"
     "|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\|.*bash|eval |> /dev/sd"
 )

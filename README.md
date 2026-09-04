@@ -153,7 +153,7 @@ The 24x7 skill uses the same pattern at workspace level: each task reads `decisi
 ### Prerequisites
 
 - **Claude Code CLI** installed and authenticated (`claude` command available)
-- **bash**, **python3**, **jq** in your PATH
+- **bash**, **python3 3.9 or newer**, **jq** in your PATH (the build scripts are tested against the macOS system Python 3.9)
 - **macOS** recommended (for `sandbox-exec`). Works on Linux without the sandbox layer.
 - A **git repository** for your project (Nightshift) or any directory (24x7)
 

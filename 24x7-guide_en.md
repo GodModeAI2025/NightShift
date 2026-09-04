@@ -22,7 +22,7 @@ After this guide, you will be able to:
 ## Prerequisites
 
 - [ ] **Claude Code CLI** installed and authenticated
-- [ ] **bash**, **python3**, and **jq** in your PATH
+- [ ] **bash**, **python3** (3.9 or newer), and **jq** in your PATH
 - [ ] **macOS** recommended (for sandbox). Linux works without it.
 - [ ] A directory for the workspace (no git required, unlike Nightshift)
 

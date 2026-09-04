@@ -24,7 +24,7 @@ Nach dieser Anleitung kannst du:
 Stelle sicher, dass du folgendes hast:
 
 - [ ] **Claude Code CLI** installiert und authentifiziert (tippe `claude` im Terminal)
-- [ ] **bash**, **python3** und **jq** im PATH
+- [ ] **bash**, **python3** (mindestens 3.9) und **jq** im PATH
 - [ ] **Ein Git-Repository** mit deinem Projekt (für Rollback)
 - [ ] **macOS** empfohlen (für Kernel-Level-Sandbox). Linux funktioniert ohne Sandbox — nutze stattdessen Docker.
 

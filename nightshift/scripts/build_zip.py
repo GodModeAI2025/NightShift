@@ -583,4 +583,7 @@ if __name__ == "__main__":
     print(f"   Aufgabe:  {AUFGABE_TITEL}")
     print(f"   Projekt:  {PROJEKTPFAD}")
     print(f"   Dateien:  {len(files)}")
-    print(f"   Schritte: {len(re.findall(r'^- \[ \]', RUNBOOK, re.MULTILINE))}")
+    # Backslashes duerfen bis Python 3.11 nicht im f-String-Ausdruck stehen,
+    # deshalb steht das Muster in einer eigenen Variablen.
+    offene_schritte = len(re.findall(r"^- \[ \]", RUNBOOK, re.MULTILINE))
+    print(f"   Schritte: {offene_schritte}")

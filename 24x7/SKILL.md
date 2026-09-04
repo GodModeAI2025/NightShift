@@ -112,7 +112,7 @@ python3 /home/claude/build_24x7.py
 | runner.sh | Endless loop: poll inbox, spawn Claude, route results. PID lock + graceful shutdown. |
 | runner-bg.sh | Background starter (nohup wrapper) |
 | watchdog.sh | Heartbeat monitor with live status: 📥inbox 🔄working ✅done ❌failed |
-| sandbox.sb | macOS sandbox profile — restricts filesystem to workspace + /tmp |
+| sandbox.sb | macOS sandbox profile: restricts writes to workspace + /tmp. Reads outside the workspace and outbound traffic on 443 stay open. |
 | .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat) |
 | CLAUDE.md | Workspace rules: isolation, autonomy zones, error tolerance, workspace memory |
 | idle/idle-tasks.md | Configurable idle behavior |
@@ -138,7 +138,7 @@ Format: date, task name, decision, reasoning. Append-only.
 
 ## Security
 
-- All work is confined to the workspace — no external paths allowed
+- The workspace boundary is a rule in CLAUDE.md, not something the setup enforces. The hook checks no paths and never sees Write or Edit, and without a running sandbox profile nothing stops a write elsewhere.
 - PreToolUse hook blocks a fixed list of command patterns: rm against dangerous targets (root, home and its direct children, globs, parent paths, .git, system directories), mkfs, dd writing to a device, sudo, chmod 777, curl piped into bash, eval. Fork bombs are not on that list, there is no pattern for them.
 - The hook carries `"matcher": "Bash"` and greps the command text, so Write and Edit never reach it. It is a typo catcher, not a boundary. See [SECURITY.md](../SECURITY.md).
 - Sandbox profile restricts writes to workspace + /tmp at kernel level. Reads outside the workspace and outbound network traffic are not restricted.

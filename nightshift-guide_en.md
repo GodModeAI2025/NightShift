@@ -59,7 +59,7 @@ The flag `--dangerously-skip-permissions` removes all approval prompts. But with
 Download the skill from the repository:
 
 ```bash
-# Option A: Download the .skill file
+# Download the skill definition (there is no .skill release)
 curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/SKILL.md -o /tmp/nightshift-skill.md
 
 # Create the skill directory
@@ -114,7 +114,7 @@ Claude validates the runbook against 15 checks:
 - Safety: No `rm -rf`? No hardcoded secrets? All paths inside project?
 - Autonomy: Three zones (green/yellow/red) defined? Error budget with stop condition?
 
-If validation fails, Claude suggests fixes. The setup is only generated when all checks pass.
+If validation fails, Claude suggests fixes. The generator writes the ZIP either way, so a failed check is a prompt to fix the runbook, not a stop.
 
 ### 3.4 Setup Files
 

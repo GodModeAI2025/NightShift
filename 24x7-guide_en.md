@@ -266,9 +266,9 @@ Stop:     kill 12345
 
 Shows live status every 60 seconds:
 ```
-✅ 14:32:01: OK (12s) | inbox: 3 | working: 1 | done: 8 | failed: 0
-✅ 14:33:01: OK (5s)  | inbox: 2 | working: 1 | done: 8 | failed: 0
-✅ 14:34:01: OK (3s)  | inbox: 2 | working: 0 | done: 9 | failed: 0
+✅ 14:32:01: OK (12s) | 📥3 🔄1 ✅8 ❌0
+✅ 14:33:01: OK (5s) | 📥2 🔄1 ✅8 ❌0
+✅ 14:34:01: OK (3s) | 📥2 🔄0 ✅9 ❌0
 ```
 
 ### Drop a Task While Running

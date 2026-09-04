@@ -99,7 +99,7 @@ Adapt thresholds to the project. A testing genre needs stricter budgets; a clean
 
 ### Step 4: Validate runbook
 
-Run the 15-point validation (structure, quality, safety, genre-check, autonomy zones, error budget). Show results to the user. Only generate the ZIP once validation passes — or when the user explicitly overrides.
+Run the 15-point validation (structure, quality, safety, genre-check, autonomy zones, error budget). Show results to the user. The build script in step 5 writes the ZIP regardless of the score, so fix a failing check before running it, or ask the user whether to proceed anyway.
 
 The validation catches: missing rollback section, vague steps, steps targeting paths outside the project, hardcoded secrets, `rm -rf` in step text, too many or too few steps, missing autonomy zones, missing error budget.
 
@@ -141,7 +141,7 @@ The ZIP contains:
 | nightshift-run.sh | Main script: headless mode + skip-permissions + PID lock + graceful shutdown |
 | nightshift-run-bg.sh | Background starter (nohup) |
 | nightshift-watchdog.sh | Heartbeat monitor with macOS notification support |
-| nightshift-sandbox.sb | macOS sandbox profile — restricts filesystem to project + /tmp |
+| nightshift-sandbox.sb | macOS sandbox profile: restricts writes to project + /tmp. Reads outside the project and outbound traffic on 443 stay open. |
 | CLAUDE-nightshift.md | Append to CLAUDE.md for project conventions + run memory |
 | README-nightshift.md | Full installation and usage guide |
 

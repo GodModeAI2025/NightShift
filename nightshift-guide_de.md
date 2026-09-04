@@ -111,7 +111,7 @@ Claude validiert das Runbook gegen 15 Checks:
 - Sicherheit: Kein `rm -rf`? Keine hardcoded Secrets? Alle Pfade im Projekt?
 - Autonomie: Drei Zonen (grün/gelb/rot) definiert? Fehler-Budget mit Stop-Bedingung?
 
-Bei Fehlern schlägt Claude Fixes vor. Das Setup wird erst generiert wenn alle Checks bestehen.
+Bei Fehlern schlägt Claude Fixes vor. Der Generator schreibt die ZIP trotzdem. Ein fehlgeschlagener Check stoppt nichts, er ist ein Hinweis, das Runbook nachzubessern.
 
 ### 3.4 Setup-Dateien
 

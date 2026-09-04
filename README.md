@@ -41,7 +41,7 @@ A markdown file with checkboxes that Claude reads before each step. After contex
 
 **Layer 2: Hooks (Guardrails)**
 Claude Code hooks are scripts that fire on specific events:
-- `PreToolUse` — Runs before every tool call. Blocks destructive commands like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`.
+- `PreToolUse` — Carries `"matcher": "Bash"`, so it runs before every Bash call and never sees `Write` or `Edit`. Blocks command patterns like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`.
 - `PostToolUse` — Runs after every tool call. Writes a heartbeat timestamp to a log file.
 - `SessionStart` (compact matcher) — Fires after every context compression. Injects "re-read the runbook" into Claude's context.
 - `Stop` (Nightshift only) — Fires every time Claude finishes a response. Every 5 completed steps, reminds Claude of autonomy zones and error budget.
@@ -120,7 +120,7 @@ Before generating the setup, the skill validates the runbook against 15 checks:
 
 **Autonomy:** Has all three zones (green/yellow/red)? Has error budget? Error budget has a stop condition?
 
-The setup is only generated when all 15 checks pass — or when you explicitly override.
+Validation is not a gate. The generator prints the score and writes the ZIP even when checks fail, so a failed check is a prompt to fix the runbook, not a stop.
 
 ### Checkpoint Repetition
 
@@ -162,17 +162,13 @@ The 24x7 skill uses the same pattern at workspace level: each task reads `decisi
 
 ### Install the Skills
 
+There is no release and no tag yet, so there is no `.skill` file to download. Clone the repo and copy both skill directories:
+
 ```bash
-# Download and install Nightshift
-curl -L https://github.com/GodModeAI2025/NightShift/releases/latest/download/nightshift.skill -o nightshift.skill
-unzip nightshift.skill -d ~/.claude/skills/
-
-# Download and install 24x7
-curl -L https://github.com/GodModeAI2025/NightShift/releases/latest/download/24x7.skill -o 24x7.skill
-unzip 24x7.skill -d ~/.claude/skills/
+git clone https://github.com/GodModeAI2025/NightShift.git
+mkdir -p ~/.claude/skills
+cp -r NightShift/nightshift NightShift/24x7 ~/.claude/skills/
 ```
-
-Or manually: download the `nightshift/` and `24x7/` directories from this repo and place them in `~/.claude/skills/`.
 
 ### Verify Installation
 
@@ -384,7 +380,7 @@ The runner picks it up automatically. Results appear in `outbox/my-task/output/`
 ./watchdog.sh
 ```
 
-Shows live status: `inbox: 3 | working: 1 | done: 12 | failed: 0`
+Shows live status: `✅ 14:32:01: OK (12s) | 📥3 🔄1 ✅12 ❌0`
 
 ### Step 5: Collect Results
 
@@ -523,7 +519,7 @@ kill $(cat /tmp/24x7.pid)
 | `.claude/settings.json` | PreToolUse + PostToolUse hooks |
 | `CLAUDE.md` | Workspace rules: autonomy zones, error tolerance, workspace memory (decisions.md) |
 | `idle/idle-tasks.md` | Configurable idle behavior |
-| `inbox/example-task/` | Example task with task.md template |
+| `inbox/beispiel-task/` | Example task with task.md template |
 
 ---
 
@@ -533,7 +529,7 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Next**
 
-- **Release assets.** The install commands under [Install the Skills](#install-the-skills) point at `releases/latest/download/nightshift.skill` and `24x7.skill`. There is no release and no tag, so the documented install path returns 404. Packaging both directories and tagging a version needs no code change.
+- **Release assets.** Installing means cloning the repo and copying two directories, because there is no release and no tag. Packaging `nightshift/` and `24x7/` as downloadable assets and tagging a version needs no code change.
 - **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
 - **Egress control.** The seatbelt profile allows outbound 443 to any host. Restricting it to the Anthropic API is what turns a write boundary into something closer to a real one.
 

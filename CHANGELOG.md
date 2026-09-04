@@ -47,6 +47,14 @@ measurement, no receipt.
   API call. Validating the generated `docker-compose.yml` needs a Compose
   command and is skipped without one.
 
+- A "Related Projects" section in the README that places
+  `moinsen-dev/NightShift`: an independent reimplementation, not a fork, no
+  code moved in either direction, therefore no `NOTICE`. It names what that
+  implementation does better (`shared/` module, longer blocklist) and where
+  its cost tracker does not hold: `CLAUDE_PID` is never assigned, `grep -oP`
+  fails on macOS, the sums live in a subshell. Checked against the repository
+  on 2026-09-04.
+
 ### Changed
 
 - `nightshift-run.sh` takes the project path from `NIGHTSHIFT_PROJEKT` and

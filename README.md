@@ -615,6 +615,24 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, validates the generated `docker-compose.yml`, runs `nightshift-run.sh` against a Claude stub for the isolation check, the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
+## Related Projects
+
+### moinsen-dev/NightShift
+
+[moinsen-dev/NightShift](https://github.com/moinsen-dev/NightShift) is an independent reimplementation of the same idea, not a fork. GitHub reports no fork relationship, and the two repositories share no history. Its `plugins/nightshift/.claude-plugin/plugin.json` names `GodModeAI` as the author and this repository as its home, so the lineage is acknowledged from that side. It ships under the plugin name `nightshift` at version 2.0.0, which is worth knowing before you install both.
+
+No code moved in either direction. Nothing here is derived from that repository, so there is no `NOTICE` file to go with it; if anything is ever taken from there, Apache-2.0 section 4 applies and the attribution comes with it.
+
+Where the two differ, as of 2026-09-04:
+
+- **It has a `shared/` module, this one does not.** Both generators here still carry the hook block, the sandbox profile and the watchdog twice. That duplication is real and it is ours.
+- **Its blocklist is longer.** Fork bombs, force-push and a strict mode are on it. The hook here has no fork-bomb pattern; `nightshift/SKILL.md` says so in the Security section.
+- **Its cost tracker cannot stop a run.** In `plugins/nightshift/scripts/shared/cost_tracker.py`, `CLAUDE_PID` appears exactly once, in the `kill` on line 33, and is never assigned; the budget query uses `grep -oP`, which BSD grep on macOS rejects; and the sums live in the subshell of a pipeline. The counter here writes its state to a file, gets the PID from the runner and kills the process group, and the budget stop is checked in CI against a stub. Measuring is the easy half — stopping is the half that has to work.
+- **Its zone enforcement has the same gap as ours.** `matcher: "Bash"` on both sides, blocked paths matched against command text on both sides. A `Write` or `Edit` outside the project passes in either implementation.
+- **What is only here:** tests and CI, a tagged release with artifacts, a SECURITY.md, the landing page, and container isolation with an egress allowlist plus a receipt that says what a night cost.
+
+The intended distinguishing feature is executing a `tasks.md` produced by [SpecForge](https://github.com/GodModeAI2025/specforge-ai-skill) as an unattended night. That is not implemented. The 15-point validation expects German section headings and the three autonomy zones, so a SpecForge `tasks.md` fails it by construction; this needs a converter and a second validation path, not another entry in the genre table. It is in the [Roadmap](#roadmap) as such, and it is a plan, not a feature.
+
 ## Acknowledgments
 
 Autonomy zones and error budget inspired by [AlpiType — Solving the AI Agent Approval Loop](https://alpitype.de/insights/ki-agenten-approval-loop/)

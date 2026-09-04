@@ -1284,7 +1284,13 @@
 <span class="comment">#  — migrate auth module to JWT"</span>
 
 <span class="comment"># Copy generated files into project</span>
+<span class="comment"># (the * glob skips dotfiles, .claude needs its own step)</span>
 <span class="cmd">cp</span> <span class="flag">-r</span> nightshift-setup/* <span class="path">/my/project/</span>
+<span class="comment"># Hooks live in .claude, copy only if there is none yet,</span>
+<span class="comment"># otherwise merge (see the guide), never overwrite</span>
+<span class="cmd">test</span> <span class="flag">-e</span> <span class="path">/my/project/.claude/settings.json</span> \
+  && <span class="cmd">echo</span> "settings.json exists, merge it" \
+  || <span class="cmd">cp</span> <span class="flag">-R</span> nightshift-setup/.claude <span class="path">/my/project/</span>
 <span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/my/project/</span>nightshift-*.sh
 <span class="cmd">cd</span> <span class="path">/my/project</span>
 
@@ -1315,7 +1321,13 @@
 <span class="comment"># "Set up a 24x7 runner at /claude-workspace"</span>
 
 <span class="comment"># Copy and start</span>
+<span class="comment"># (the * glob skips dotfiles, .claude needs its own step)</span>
 <span class="cmd">cp</span> <span class="flag">-r</span> 24x7-setup/* <span class="path">/claude-workspace/</span>
+<span class="comment"># Hooks live in .claude, copy only if there is none yet,</span>
+<span class="comment"># otherwise merge (see the guide), never overwrite</span>
+<span class="cmd">test</span> <span class="flag">-e</span> <span class="path">/claude-workspace/.claude/settings.json</span> \
+  && <span class="cmd">echo</span> "settings.json exists, merge it" \
+  || <span class="cmd">cp</span> <span class="flag">-R</span> 24x7-setup/.claude <span class="path">/claude-workspace/</span>
 <span class="cmd">chmod</span> <span class="flag">+x</span> <span class="path">/claude-workspace/</span>*.sh
 <span class="cmd">cd</span> <span class="path">/claude-workspace</span>
 <span class="cmd">./runner-bg.sh</span>

@@ -536,11 +536,19 @@ unzip nightshift-setup.zip
 
 # 2. Copy into project
 cd {PROJEKTPFAD}
-cp -r /path/to/nightshift-setup/.claude .
 cp /path/to/nightshift-setup/runbook.md .
 cp /path/to/nightshift-setup/nightshift-*.sh .
 cp /path/to/nightshift-setup/nightshift-sandbox.sb .
 chmod +x nightshift-*.sh
+
+# 2a. Hook configuration, an existing settings.json is never overwritten
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it (see below)"
+else
+  mkdir -p .claude
+  cp -R /path/to/nightshift-setup/.claude/. .claude/
+fi
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
 
 # 3. Append to CLAUDE.md
 cat /path/to/nightshift-setup/CLAUDE-nightshift.md >> CLAUDE.md
@@ -552,6 +560,23 @@ git add -A && git commit -m "Checkpoint before Nightshift"
 ./nightshift-run.sh                                        # Foreground
 ./nightshift-run-bg.sh                                     # Background
 sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh  # With sandbox
+```
+
+## Existing .claude/settings.json
+
+Copying would drop your own hooks, permissions, and MCP settings. Merge instead.
+The command keeps your entries and appends the Nightshift hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {{}}) as $mine | (.[1].hooks // {{}}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({{}}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \\
+  .claude/settings.json /path/to/nightshift-setup/.claude/settings.json \\
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ## Risk Checks ({GENRE})

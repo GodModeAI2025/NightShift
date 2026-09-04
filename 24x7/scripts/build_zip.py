@@ -470,8 +470,17 @@ README = f"""# Claude 24x7 — Endless Runner
 ```bash
 # 1. Unzip and install
 unzip 24x7-setup.zip
-cp -r 24x7-setup/* {WORKSPACE}/
-chmod +x {WORKSPACE}/runner.sh {WORKSPACE}/runner-bg.sh {WORKSPACE}/watchdog.sh
+cd {WORKSPACE}
+# The * glob does not match dotfiles, .claude needs its own step
+cp -r /path/to/24x7-setup/* .
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it (see below)"
+else
+  mkdir -p .claude
+  cp -R /path/to/24x7-setup/.claude/. .claude/
+fi
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
+chmod +x runner.sh runner-bg.sh watchdog.sh
 
 # 2. Start
 cd {WORKSPACE}
@@ -479,6 +488,23 @@ cd {WORKSPACE}
 
 # 3. Watchdog (second terminal)
 ./watchdog.sh
+```
+
+## Existing .claude/settings.json
+
+Copying would drop your own hooks, permissions, and MCP settings. Merge instead.
+The command keeps your entries and appends the 24x7 hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {{}}) as $mine | (.[1].hooks // {{}}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({{}}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \\
+  .claude/settings.json /path/to/24x7-setup/.claude/settings.json \\
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ## Drop a Task

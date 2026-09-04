@@ -205,12 +205,37 @@ Claude will:
 
 ```bash
 cd /your/project
-cp -r nightshift-setup/.claude .
 cp nightshift-setup/runbook.md .
 cp nightshift-setup/nightshift-*.sh .
 cp nightshift-setup/nightshift-sandbox.sb .
 cat nightshift-setup/CLAUDE-nightshift.md >> CLAUDE.md
 chmod +x nightshift-*.sh
+
+# Hook configuration. An existing settings.json is never overwritten.
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it instead of copying (see below)"
+else
+  mkdir -p .claude
+  cp -R nightshift-setup/.claude/. .claude/
+fi
+
+# Without this file the run has no hooks and no protection layer
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
+```
+
+**If `.claude/settings.json` already exists**, merging keeps your own hooks,
+permissions, and MCP settings and appends the Nightshift hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {}) as $mine | (.[1].hooks // {}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \
+  .claude/settings.json nightshift-setup/.claude/settings.json \
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ### Step 3: Commit Your Current State
@@ -278,10 +303,39 @@ Claude will generate the workspace structure with runner, watchdog, hooks, and s
 ### Step 2: Install and Start
 
 ```bash
-cp -r 24x7-setup/* /your/workspace/
-chmod +x /your/workspace/*.sh
 cd /your/workspace
+
+# The * glob does not match dotfiles, so .claude needs its own step
+cp -r /path/to/24x7-setup/* .
+
+# Hook configuration. An existing settings.json is never overwritten.
+if [ -e .claude/settings.json ]; then
+  echo "STOP: .claude/settings.json exists, merge it instead of copying (see below)"
+else
+  mkdir -p .claude
+  cp -R /path/to/24x7-setup/.claude/. .claude/
+fi
+
+# Without this file the daemon runs with no hooks at all
+test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
+
+chmod +x *.sh
 ./runner-bg.sh
+```
+
+**If `.claude/settings.json` already exists**, merging keeps your own entries
+and appends the 24x7 hooks per event type:
+
+```bash
+jq -s '(.[0].hooks // {}) as $mine | (.[1].hooks // {}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \
+  .claude/settings.json /path/to/24x7-setup/.claude/settings.json \
+  > .claude/settings.merged.json
+
+# read it, then take it over
+mv .claude/settings.merged.json .claude/settings.json
 ```
 
 ### Step 3: Drop Tasks

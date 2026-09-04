@@ -186,6 +186,42 @@ Schlechte Tasks sind vage: "Verbessere die Codebase" oder "Fix alles". Claude rÃ
 
 ## Lektion 6: Starten und Ã¼berwachen
 
+### Dateien in den Workspace kopieren
+
+```bash
+cd /dein/workspace
+
+# Das Glob * erfasst keine Dotfiles, .claude braucht einen eigenen Schritt
+cp -r /pfad/zu/24x7-setup/* .
+
+# Hook-Konfiguration. Eine vorhandene settings.json wird nicht ueberschrieben.
+if [ -e .claude/settings.json ]; then
+  echo "STOPP: .claude/settings.json existiert, zusammenfuehren statt kopieren (siehe unten)"
+else
+  mkdir -p .claude
+  cp -R /pfad/zu/24x7-setup/.claude/. .claude/
+fi
+
+# Ohne diese Datei laeuft der Runner voellig ohne Hooks
+test -f .claude/settings.json && echo "Hooks aktiv" || echo "WARNUNG: keine Hooks"
+```
+
+**Wenn `.claude/settings.json` schon existiert:** zusammenfuehren statt kopieren.
+Der Befehl behaelt deine eigenen Eintraege und haengt die 24x7-Hooks je
+Ereignistyp an:
+
+```bash
+jq -s '(.[0].hooks // {}) as $mine | (.[1].hooks // {}) as $new
+       | (.[0] * .[1])
+       | .hooks = (reduce (($mine | to_entries[]), ($new | to_entries[])) as $e
+                   ({}; .[$e.key] = ((.[$e.key] // []) + $e.value)))' \
+  .claude/settings.json /pfad/zu/24x7-setup/.claude/settings.json \
+  > .claude/settings.merged.json
+
+# durchlesen, dann uebernehmen
+mv .claude/settings.merged.json .claude/settings.json
+```
+
 ### Runner starten
 
 ```bash

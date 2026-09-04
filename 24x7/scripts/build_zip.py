@@ -188,6 +188,21 @@ MAX_SECONDS={MAX_TASK_MINUTES * 60}
 IDLE_SECONDS={IDLE_TIMEOUT_MINUTES * 60}
 LOGFILE="/tmp/24x7-$(date +%Y%m%d).log"
 
+# Timeout-Kommando bestimmen. Ohne Timeout laeuft ein haengender Task
+# unbegrenzt weiter, deshalb Abbruch statt stillem Weiterlaufen.
+# macOS bringt kein timeout mit; coreutils installiert es als gtimeout.
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
+else
+    echo "❌ Weder 'timeout' noch 'gtimeout' gefunden."
+    echo "   Der Runner braucht eins von beiden, um Tasks zu deckeln."
+    echo "   macOS: brew install coreutils (liefert gtimeout)"
+    echo "   Linux: Paket coreutils installieren"
+    exit 1
+fi
+
 # PID-Lock: Verhindert doppelten Start
 PIDFILE="/tmp/24x7.pid"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
@@ -221,7 +236,7 @@ echo "============================================" | tee -a "$LOGFILE"
 echo "  Claude 24x7 Runner gestartet: $(date)" | tee -a "$LOGFILE"
 echo "  Workspace: $WORKSPACE" | tee -a "$LOGFILE"
 echo "  Poll-Intervall: ${{POLL}}s" | tee -a "$LOGFILE"
-echo "  Task-Timeout: {MAX_TASK_MINUTES} Min" | tee -a "$LOGFILE"
+echo "  Task-Timeout: {MAX_TASK_MINUTES} Min (via $TIMEOUT_BIN)" | tee -a "$LOGFILE"
 echo "  Idle: {IDLE_BEHAVIOR}" | tee -a "$LOGFILE"
 echo "  Log: $LOGFILE" | tee -a "$LOGFILE"
 echo "  PID: $$" | tee -a "$LOGFILE"
@@ -265,7 +280,7 @@ while true; do
 
     # Claude starten mit Timeout
     echo "   ▶ Claude startet..." | tee -a "$LOGFILE"
-    timeout $MAX_SECONDS claude -p \\
+    "$TIMEOUT_BIN" $MAX_SECONDS claude -p \\
       "Du bearbeitest folgenden Task im Ordner $WORKING/$TASK_NAME.
 
 AUFTRAG (aus task.md):
@@ -312,7 +327,7 @@ REGELN:
     cp "$IDLE/idle-tasks.md" "$IDLE_DIR/task.md" 2>/dev/null
 
     if [ -f "$IDLE_DIR/task.md" ] && ! grep -q "Session sofort beenden" "$IDLE_DIR/task.md"; then
-      timeout $IDLE_SECONDS claude -p \\
+      "$TIMEOUT_BIN" $IDLE_SECONDS claude -p \\
         "Du bist im Idle-Modus. Lies $IDLE_DIR/task.md und arbeite die Idle-Aufgaben ab.
 Ergebnisse in $IDLE_DIR/output/ ablegen.
 Workspace-Root ist $WORKSPACE.

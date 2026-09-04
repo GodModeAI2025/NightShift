@@ -23,6 +23,7 @@ After this guide, you will be able to:
 
 - [ ] **Claude Code CLI** installed and authenticated
 - [ ] **bash**, **python3** (3.9 or newer), and **jq** in your PATH
+- [ ] **timeout** or **gtimeout** in your PATH. macOS does not ship `timeout`: `brew install coreutils` provides `gtimeout`. Without either, the runner refuses to start.
 - [ ] **macOS** recommended (for sandbox). Linux works without it.
 - [ ] A directory for the workspace (no git required, unlike Nightshift)
 

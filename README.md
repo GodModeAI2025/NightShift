@@ -154,6 +154,7 @@ The 24x7 skill uses the same pattern at workspace level: each task reads `decisi
 
 - **Claude Code CLI** installed and authenticated (`claude` command available)
 - **bash**, **python3 3.9 or newer**, **jq** in your PATH (the build scripts are tested against the macOS system Python 3.9)
+- **timeout** or **gtimeout** for 24x7 only. macOS does not ship `timeout`; `brew install coreutils` provides `gtimeout`. The runner uses whichever it finds and refuses to start without one.
 - **macOS** recommended (for `sandbox-exec`). Works on Linux without the sandbox layer.
 - A **git repository** for your project (Nightshift) or any directory (24x7)
 

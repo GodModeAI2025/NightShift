@@ -168,8 +168,9 @@ The Stop hook tracks progress between checks. If the number of completed runbook
 
 ## Security
 
-- PreToolUse hook blocks: rm -rf, mkfs, dd, sudo, chmod 777, curl-pipe-bash, eval, fork bombs
-- Sandbox profile restricts filesystem access to project directory + /tmp at kernel level
+- PreToolUse hook blocks a fixed list of command patterns: rm against dangerous targets (root, home and its direct children, globs, parent paths, .git, system directories), mkfs, dd writing to a device, sudo, chmod 777, curl piped into bash, eval. Fork bombs are not on that list, there is no pattern for them.
+- The hook carries `"matcher": "Bash"` and greps the command text, so Write and Edit never reach it. It is a typo catcher, not a boundary. See [SECURITY.md](../SECURITY.md).
+- Sandbox profile restricts writes to project directory + /tmp at kernel level. Reads outside the project and outbound network traffic are not restricted.
 - PID lock prevents duplicate runner instances
 - Always recommend sandbox; warn when using skip-permissions without it
 - Cost warning displayed at runner startup — headless runs consume API credits without supervision

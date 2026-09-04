@@ -1013,7 +1013,7 @@
       <div class="security-layer">
         <div class="num">1</div>
         <h4>PreToolUse Hook</h4>
-        <p>Blocks rm -rf, sudo, mkfs, chmod 777, curl|bash, eval, fork bombs</p>
+        <p>Blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval. No pattern for fork bombs.</p>
       </div>
       <div class="security-layer">
         <div class="num">2</div>
@@ -1052,7 +1052,7 @@
     <div class="layer-detail">
       <h4><span class="badge">Layer 2</span> Hooks — Automated Guardrails</h4>
       <p>Claude Code hooks are scripts that fire on specific events. They run even with <code>--dangerously-skip-permissions</code>. A PreToolUse hook returning exit code 2 blocks the tool call unconditionally — Claude cannot override it.</p>
-      <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Blocks rm -rf, sudo, mkfs, chmod 777, curl|bash, eval
+      <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Blocks rm against dangerous targets, sudo, mkfs, dd, chmod 777, curl|bash, eval
 <span style="color:var(--accent-green)">PostToolUse</span>   → Writes heartbeat timestamp after every tool call
 <span style="color:var(--accent-night-glow)">SessionStart</span>  → After /compact: "Re-read runbook.md, continue at next open item"
 <span style="color:var(--accent-24x7-glow)">Stop</span>          → Every 5 steps: repeat constraints. 3× no progress: STALL WARNING</div>
@@ -1060,7 +1060,8 @@
 
     <div class="layer-detail">
       <h4><span class="badge">Layer 3</span> macOS Sandbox — Kernel-Level Isolation</h4>
-      <p>A <code>sandbox-exec</code> profile restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and /tmp. Even if Claude tries <code>rm -rf ~/</code>, the kernel blocks it — the hook doesn't even need to catch it. This is the real safety net, not the hook.</p>
+      <p>A <code>sandbox-exec</code> profile restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and /tmp. Even if Claude tries <code>rm -rf ~/</code>, the kernel blocks it, without the hook having to catch it.</p>
+      <p style="margin-top: 12px;">What the profile does not restrict: reads and network traffic. It grants <code>file-read*</code> on <code>$HOME/.claude</code> and <code>$HOME/.config</code>, and it allows outbound TCP on port 443 to any host. Your other projects' transcripts sit in the first directory, CLI tokens commonly in the second. Anything the run can read, it can also send. Call it a write boundary, not a security boundary. The <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a> has the threat model.</p>
       <p style="margin-top: 12px;"><strong>Important:</strong> The sandbox is not active by default. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to everything your user account can reach. On Linux, use Docker or a dedicated user account instead.</p>
     </div>
 
@@ -1203,7 +1204,7 @@
 
     <div class="warning">
       <h4>The Sandbox Is Not Active by Default</h4>
-      <p>The generated sandbox profile is just a file. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to your entire user account. The PreToolUse hook catches obvious destructive commands via pattern matching, but it's not a real security boundary — the sandbox is. On Linux, use Docker or a dedicated user account instead of sandbox-exec.</p>
+      <p>The generated sandbox profile is just a file. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to your entire user account. The PreToolUse hook matches command text and only sees Bash, so Write and Edit pass it untouched. With the profile active, writes outside the project are blocked; reads and outbound traffic are not. Details in the <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a>. On Linux there is no sandbox-exec, see the note below.</p>
     </div>
 
     <div class="warning">
@@ -1218,7 +1219,7 @@
 
     <div class="warning">
       <h4>macOS Only for Sandbox</h4>
-      <p><code>sandbox-exec</code> is a macOS-only feature (deprecated but functional). On Linux, run Claude inside a Docker container with mounted volumes, or create a dedicated user account with limited permissions. The hooks and watchdog work on any platform — only the kernel-level sandbox is macOS-specific.</p>
+      <p><code>sandbox-exec</code> is a macOS-only feature (deprecated but functional). On Linux, run Claude inside a Docker container with mounted volumes. A dedicated user account is the weaker fallback, and the short recipe that used to stand in the README does not work: the copy made with <code>sudo cp -r</code> belongs to root, and the generated <code>nightshift-run.sh</code> carries a hardcoded <code>cd</code> into the directory that was set when the setup was generated. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec">README</a> has the corrected steps. The hooks and watchdog work on any platform, only the kernel-level sandbox is macOS-specific.</p>
     </div>
 
     <div class="warning">

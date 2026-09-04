@@ -49,7 +49,7 @@ Claude Code hooks are scripts that fire on specific events:
 Hooks fire even with `--dangerously-skip-permissions`. A `PreToolUse` hook returning exit code 2 blocks the tool call unconditionally.
 
 **Layer 3: macOS Sandbox (Kernel-Level Isolation)**
-A `sandbox-exec` profile that restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and `/tmp`. Even if Claude tries `rm -rf ~/`, the kernel blocks it — the hook doesn't even need to catch it. This is the real safety net.
+A `sandbox-exec` profile that restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and `/tmp`. Even if Claude tries `rm -rf ~/`, the kernel blocks it, without the hook having to catch it. This is the only layer a kernel enforces, and it enforces writes: reads outside the project and outbound network traffic stay open. See [What the Sandbox Does Not Cover](#what-the-sandbox-does-not-cover) and [SECURITY.md](SECURITY.md).
 
 Note: `sandbox-exec` is deprecated by Apple but still functional on current macOS versions. It uses Seatbelt, a kernel-level sandbox framework.
 
@@ -424,15 +424,32 @@ The generated `sandbox.sb` / `nightshift-sandbox.sb` file is just a profile. You
 sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
 ```
 
-Without `sandbox-exec`, Claude has full access to everything your user account can reach. The `PreToolUse` hook catches obvious destructive commands, but it's pattern-matching — not a real security boundary. The sandbox is the real security boundary.
+Without `sandbox-exec`, Claude has full access to everything your user account can reach. The `PreToolUse` hook greps the command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
 
-On Linux, there is no `sandbox-exec`. Use Docker or a dedicated user account instead:
+### What the Sandbox Does Not Cover
+
+The sandbox is the only layer that a kernel enforces, and what it enforces is writes. It restricts neither reads nor network traffic. The generated profile grants `file-read*` on `$HOME/.claude` and `$HOME/.config`, and it allows `(allow network-outbound (remote tcp "*:443"))` without a destination. `~/.claude` holds the transcripts of your other projects, `~/.config` commonly holds CLI tokens. Anything the run can read, it can also send.
+
+Calling the sandbox a security boundary is only accurate for writes to the filesystem. [SECURITY.md](SECURITY.md) has the threat model, the trust boundaries, and the list of known gaps.
+
+### Linux Has No sandbox-exec
+
+Docker with the project mounted is the route that gives you an enforced boundary. A dedicated user account scopes file access with Unix permissions, which is weaker and takes more than three lines:
 
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /your/project /home/clauderunner/project
-sudo -u clauderunner ./nightshift-run.sh
+sudo chown -R clauderunner: /home/clauderunner/project
+sudo -u clauderunner /home/clauderunner/project/nightshift-run.sh
 ```
+
+Three things about that recipe:
+
+- The copy that `sudo cp -r` creates belongs to root. Without the `chown`, the runner account cannot write in its own working copy.
+- `nightshift-run.sh` starts with a `cd` to the path that was set when the setup was generated. Regenerate the setup with `NIGHTSHIFT_PROJECT=/home/clauderunner/project`, otherwise the run leaves the new account and works in the original directory.
+- The new account has no Claude Code credentials. Authenticate as that user once before the first run.
+
+Even then the account reaches the network and can read every world-readable file on the machine. This is permission scoping, not isolation.
 
 ### Git Is Your Undo Button (Nightshift)
 

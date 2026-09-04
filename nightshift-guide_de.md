@@ -255,12 +255,14 @@ Vage Schritte erzeugen vage Ergebnisse. Prüfe das Runbook vor dem Start. Bei me
 Bei Runs über 20 Minuten passiert Kontextkomprimierung. Die Hooks fangen das ab, aber bei 30+ Schritten sinkt die Qualität. Unter 20 Schritte pro Run bleiben.
 
 ### Linux-Nutzer
-`sandbox-exec` gibt es nur auf macOS. Nutze Docker oder einen eigenen Benutzer:
+`sandbox-exec` gibt es nur auf macOS. Docker mit gemountetem Projekt ist der Weg, der eine durchgesetzte Grenze liefert. Ein eigener Benutzer schraenkt nur die Dateirechte ein und braucht drei Schritte mehr:
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /dein/projekt /home/clauderunner/projekt
-sudo -u clauderunner ./nightshift-run.sh
+sudo chown -R clauderunner: /home/clauderunner/projekt
+sudo -u clauderunner /home/clauderunner/projekt/nightshift-run.sh
 ```
+Die Kopie aus `sudo cp -r` gehoert sonst root, und der Runner kann in seinem eigenen Arbeitsverzeichnis nicht schreiben. Ausserdem steht im erzeugten `nightshift-run.sh` ein fester `cd` auf den Pfad, der beim Generieren gesetzt war: das Setup mit `NIGHTSHIFT_PROJECT=/home/clauderunner/projekt` neu erzeugen, sonst laeuft der Run wieder im Originalverzeichnis. Das neue Konto braucht eine eigene Claude-Code-Anmeldung.
 
 ---
 

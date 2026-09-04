@@ -13,6 +13,7 @@ Pull-Request.
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -47,6 +48,32 @@ def compose_kommando():
     return None
 
 
+def in_container():
+    """Spiegelt alle vier Containersonden aus isolation_messen().
+
+    Weniger als alle vier waere eine Luecke: laeuft die CI selbst als
+    Container-Job, misst der Runner zu Recht "docker" und der Test unten
+    wuerde an der eigenen Erwartung scheitern statt uebersprungen zu werden.
+    """
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return True
+    for pfad, muster in (
+        ("/proc/1/cgroup", ("docker", "containerd", "kubepods", "libpod", "lxc")),
+        ("/proc/mounts", ("overlay / ",)),
+    ):
+        try:
+            with open(pfad) as datei:
+                inhalt = datei.read()
+        except (IOError, OSError):
+            continue
+        if pfad.endswith("mounts"):
+            if any(zeile.startswith("overlay / ") for zeile in inhalt.splitlines()):
+                return True
+        elif any(wort in inhalt for wort in muster):
+            return True
+    return False
+
+
 class IsolationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -73,8 +100,9 @@ class IsolationTest(unittest.TestCase):
         self.assertIn("AS egress", inhalt)
         self.assertIn("USER node", inhalt)
         self.assertIn("USER tinyproxy", inhalt)
-        # Der Runner muss wissen, dass er isoliert laeuft, und das Projekt im
-        # Container unter /project finden statt unter dem Pfad des Hosts.
+        # NIGHTSHIFT_SANDBOXED ist im Container nur noch die Gegenprobe:
+        # der Runner misst selbst und bricht ab, wenn die Variable etwas
+        # anderes behauptet. Das Projekt liegt im Container unter /project.
         self.assertIn("NIGHTSHIFT_SANDBOXED=docker", inhalt)
         self.assertIn("NIGHTSHIFT_PROJEKT=/project", inhalt)
 
@@ -112,8 +140,46 @@ class IsolationTest(unittest.TestCase):
         eintraege = helfer.zip_eintraege(self.zip_pfad)
         self.assertIn(PRAEFIX + "nightshift-sandbox.sb", eintraege)
         readme = self.datei("README-nightshift.md")
-        self.assertIn("sandbox-exec", readme)
-        self.assertIn("NIGHTSHIFT_SANDBOXED=seatbelt", readme)
+        self.assertIn("sandbox-exec -f nightshift-sandbox.sb", readme)
+        # Die Variable darf nicht mehr als Weg in die Isolation dastehen.
+        self.assertNotIn("NIGHTSHIFT_SANDBOXED=seatbelt", readme)
+
+    def test_sandboxprofil_startet_ueberhaupt_ein_programm(self):
+        """Ein Profil, unter dem nichts laeuft, schuetzt niemanden.
+
+        Das Profil vor dieser Runde beendete schon /bin/echo mit SIGABRT,
+        weil es Lesezugriffe ausserhalb weniger Pfade verbot und der
+        dyld-Cache auf aktuellem macOS ausserhalb davon liegt.
+        """
+        if not sys.platform.startswith("darwin"):
+            raise unittest.SkipTest("sandbox-exec gibt es nur auf macOS")
+        if shutil.which("sandbox-exec") is None:
+            raise unittest.SkipTest("sandbox-exec nicht vorhanden")
+        arbeit = tempfile.mkdtemp(prefix="nightshift-sb-")
+        try:
+            profil = os.path.join(arbeit, "nightshift-sandbox.sb")
+            with open(profil, "w") as datei:
+                datei.write(self.datei("nightshift-sandbox.sb"))
+            lauf = subprocess.run(
+                ["sandbox-exec", "-f", profil, "/bin/echo", "start-ok"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            ausgabe = lauf.stdout.decode("utf-8", "replace")
+            self.assertEqual(0, lauf.returncode, ausgabe)
+            self.assertIn("start-ok", ausgabe)
+
+            # Und die Sonde, an der der Runner die Isolation erkennt:
+            # /Users muss unter dem Profil unlesbar sein.
+            lauf = subprocess.run(
+                ["sandbox-exec", "-f", profil, "/bin/ls", "/Users"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            self.assertNotEqual(
+                0, lauf.returncode,
+                "unter dem Profil ist /Users lesbar, dann traegt die Sonde nicht",
+            )
+        finally:
+            shutil.rmtree(arbeit, ignore_errors=True)
 
     def test_runner_bricht_ohne_isolation_ab_und_laeuft_mit_optout(self):
         """Der Kern der Umstellung: ohne Isolation kein Lauf.
@@ -121,6 +187,11 @@ class IsolationTest(unittest.TestCase):
         Ein Stub statt claude sorgt dafuer, dass kein echter API-Aufruf
         entsteht, egal welcher Zweig genommen wird.
         """
+        if in_container():
+            raise unittest.SkipTest(
+                "dieser Test braucht eine Maschine ohne Container: "
+                "hier misst der Runner zu Recht 'docker'"
+            )
         arbeit = tempfile.mkdtemp(prefix="nightshift-lauf-")
         try:
             skript = os.path.join(arbeit, "nightshift-run.sh")
@@ -166,9 +237,19 @@ class IsolationTest(unittest.TestCase):
             self.assertEqual(0, code, ausgabe)
             self.assertIn("der Lauf geht weiter", ausgabe)
 
-            code, ausgabe = starte({"NIGHTSHIFT_SANDBOXED": "docker"})
+            # Der Kern dieser Runde: die Variable schaltet nichts frei.
+            # Frueher lief jeder Wert durch und landete unveraendert als
+            # "isolation" im Receipt.
+            for wert in ("banane", "seatbelt", "docker"):
+                code, ausgabe = starte({"NIGHTSHIFT_SANDBOXED": wert})
+                self.assertEqual(3, code, ausgabe)
+                self.assertIn("gemessen wurde 'keine'", ausgabe)
+
+            # Und beim bewussten Verzicht steht "keine" im Receipt, nicht
+            # ein Wort, das jemand hingeschrieben hat.
+            code, ausgabe = starte({"NIGHTSHIFT_ALLOW_UNSANDBOXED": "1"})
             self.assertEqual(0, code, ausgabe)
-            self.assertIn("Isolation: docker", ausgabe)
+            self.assertIn("Isolation: keine", ausgabe)
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
 

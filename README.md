@@ -56,7 +56,7 @@ The `sandbox-exec` profile stays as the macOS option. It restricts writes at the
 24x7 has neither of the two yet. Its runner still starts without any isolation check and its setup contains no container files.
 
 **Layer 3b: Cost Governor (Nightshift)**
-`nightshift-cost.sh` reads Claude's `stream-json` output, adds up the `usage` fields per model and estimates the dollar figure from a dated price table. When the estimate passes the budget, it terminates the Claude process and its children, and the run ends with exit code 9. Without `jq`, or with an output format it does not recognise, it measures nothing and lets the run continue — a broken counter must not kill a working night.
+`nightshift-cost.sh` reads Claude's `stream-json` output, adds up the `usage` fields per model and estimates the dollar figure from a dated price table. When the estimate passes the budget, it terminates Claude's whole process group — a grandchild that outlived the parent used to keep the pipe open and the run hanging — and the run ends with exit code 9. Without `jq`, and equally when the stream carries no `usage` events at all, it measures nothing, says `unbekannt` and lets the run continue — a broken counter must not kill a working night, and it must not report a zero it never measured.
 
 **Layer 4: Watchdog (Liveness Monitoring)**
 A separate script that checks the heartbeat file. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm — either a macOS notification or a message you can hook into your own alerting system.
@@ -276,8 +276,10 @@ Builds both images, mounts the project as `/project`, runs the night, tears the 
 
 **With the macOS sandbox** (option):
 ```bash
-NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
 ```
+
+No environment variable is involved. The runner probes whether it is fenced: under the profile it can list the project but not `/Users`, and that is what earns the `seatbelt` state.
 
 **Without isolation** (aborts unless you say so):
 ```bash
@@ -448,7 +450,7 @@ Configure by editing `idle/idle-tasks.md` or setting the idle behavior when gene
 
 Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. A 24x7 runner generates continuous costs.
 
-Nightshift measures and stops. The counter sums the `usage` fields of the `stream-json` stream and estimates the dollars from a price table with a date on it; at the budget it kills the run. The number in `receipt.json` is an estimate, not an invoice — the invoice is at [console.anthropic.com](https://console.anthropic.com), and prices move.
+Nightshift measures and stops. The counter sums the `usage` fields of the `stream-json` stream and estimates the dollars from a price table with a date on it; at the budget it kills Claude's process group. On a real run against the API the estimate came out at 0.25860 USD against the 0.25863 USD Claude reported for the same request. A model the table does not know is billed at twice the most expensive known row, because a newer model can be dearer than anything in the table. The number in `receipt.json` is still an estimate, not an invoice — the invoice is at [console.anthropic.com](https://console.anthropic.com), and prices move.
 
 ```bash
 NIGHTSHIFT_BUDGET_USD=5 ./nightshift-docker.sh          # dollar ceiling, default 25
@@ -459,15 +461,17 @@ NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh    # additional token ceili
 
 ### Nightshift Refuses to Run Without Isolation
 
-`nightshift-run.sh` checks how it is fenced before it calls Claude:
+`nightshift-run.sh` measures how it is fenced before it calls Claude. It measures — it does not ask:
 
-| State | How it is reached | Exit |
-|---|---|---|
-| `docker` | `./nightshift-docker.sh`, or any container (`/.dockerenv`) | runs |
-| `seatbelt` | `NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh` | runs |
-| `keine` | plain `./nightshift-run.sh` | exit code 3 |
+| State | How it is reached | How it is verified | Exit |
+|---|---|---|---|
+| `docker` | `./nightshift-docker.sh`, or any container | `/.dockerenv`, `/run/.containerenv`, `/proc/1/cgroup`, or an overlay root | runs |
+| `seatbelt` | `sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh` | the runner can list the project but not `/Users`; the profile denies that read | runs |
+| `keine` | plain `./nightshift-run.sh` | neither probe answered | exit code 3 |
 
-`NIGHTSHIFT_ALLOW_UNSANDBOXED=1` runs anyway. The state ends up in the receipt, so afterwards you can tell how a given night was fenced.
+`NIGHTSHIFT_SANDBOXED` used to be the whole check, and any word passed it: `NIGHTSHIFT_SANDBOXED=banane` ran on a bare macOS shell with `--dangerously-skip-permissions` and wrote `isolation: banane` into the receipt. It is now a cross-check only. Set it, and if it disagrees with the measurement the run aborts with exit code 3; it grants nothing.
+
+`NIGHTSHIFT_ALLOW_UNSANDBOXED=1` runs anyway, and the receipt then says `keine` — never a word somebody typed. The state ends up in the receipt, so afterwards you can tell how a given night was fenced.
 
 Isolation is not the same as the hook. The `PreToolUse` hook greps command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
 
@@ -475,7 +479,9 @@ Isolation is not the same as the hook. The `PreToolUse` hook greps command text,
 
 ### What the Sandbox Does Not Cover
 
-The sandbox is the only layer that a kernel enforces, and what it enforces is writes. It restricts neither reads nor network traffic. The generated profile grants `file-read*` on `$HOME/.claude` and `$HOME/.config`, and it allows `(allow network-outbound (remote tcp "*:443"))` without a destination. `~/.claude` holds the transcripts of your other projects, `~/.config` commonly holds CLI tokens. Anything the run can read, it can also send.
+The sandbox is the only layer that a kernel enforces, and what it enforces is writes. It restricts neither reads nor network traffic. The generated profile allows `file-read*` broadly, denies `/Users` and `/home` and then re-grants `$HOME/.claude`, `$HOME/.config` and the other tool directories, and it allows `(allow network-outbound (remote tcp "*:443"))` without a destination. `~/.claude` holds the transcripts of your other projects, `~/.config` commonly holds CLI tokens. Anything the run can read, it can also send.
+
+Reads are open on purpose, and it is a concession, not a design goal: a profile that allowed only the handful of paths this one used to list no longer starts any program on current macOS. Measured on Darwin 27, `sandbox-exec -f nightshift-sandbox.sb /bin/echo hi` ended with SIGABRT — the dyld cache sits outside that list. A profile under which nothing runs protects nobody, so the profile now keeps the write fence and the home-directory fence and gives up the read fence it never actually delivered.
 
 Calling the sandbox a security boundary is only accurate for writes to the filesystem. [SECURITY.md](SECURITY.md) has the threat model, the trust boundaries, and the list of known gaps.
 
@@ -627,7 +633,7 @@ Where the two differ, as of 2026-09-04:
 
 - **It has a `shared/` module, this one does not.** Both generators here still carry the hook block, the sandbox profile and the watchdog twice. That duplication is real and it is ours.
 - **Its blocklist is longer.** Fork bombs, force-push and a strict mode are on it. The hook here has no fork-bomb pattern; `nightshift/SKILL.md` says so in the Security section.
-- **Its cost tracker cannot stop a run.** In `plugins/nightshift/scripts/shared/cost_tracker.py`, `CLAUDE_PID` appears exactly once, in the `kill` on line 33, and is never assigned; the budget query uses `grep -oP`, which BSD grep on macOS rejects; and the sums live in the subshell of a pipeline. The counter here writes its state to a file, gets the PID from the runner and kills the process group, and the budget stop is checked in CI against a stub. Measuring is the easy half — stopping is the half that has to work.
+- **Its cost tracker cannot stop a run.** In `plugins/nightshift/scripts/shared/cost_tracker.py`, `CLAUDE_PID` appears exactly once, in the `kill` on line 33, and is never assigned; the budget query uses `grep -oP`, which BSD grep on macOS rejects; and the sums live in the subshell of a pipeline. The counter here writes its state to a file, gets the PID from the runner and kills the process group — `kill -- -PGID` against a group the runner opens with `set -m`, which is what actually reaches a grandchild that outlived its parent — and the budget stop is checked in CI against a stub with exactly such a grandchild. Measuring is the easy half — stopping is the half that has to work.
 - **Its zone enforcement has the same gap as ours.** `matcher: "Bash"` on both sides, blocked paths matched against command text on both sides. A `Write` or `Edit` outside the project passes in either implementation.
 - **What is only here:** tests and CI, a tagged release with artifacts, a SECURITY.md, the landing page, and container isolation with an egress allowlist plus a receipt that says what a night cost.
 

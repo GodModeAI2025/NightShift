@@ -194,10 +194,12 @@ Baut beide Images, mountet nur das Projekt nach `/project`, laesst die Nacht lau
 
 **Mit Seatbelt-Profil (macOS-Option):**
 ```bash
-NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
 ```
 
-Ein blosses `./nightshift-run.sh` bricht mit Exit-Code 3 ab. Wer bewusst ohne Isolation laufen will, setzt `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`.
+Keine Umgebungsvariable im Spiel: der Runner prueft mit einer Sonde, ob er wirklich hinter dem Profil sitzt. Unter dem Profil kann er das Projekt auflisten, `/Users` aber nicht, und genau das ergibt den Zustand `seatbelt`.
+
+Ein blosses `./nightshift-run.sh` bricht mit Exit-Code 3 ab. Wer bewusst ohne Isolation laufen will, setzt `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`; im Receipt steht dann `keine`. `NIGHTSHIFT_SANDBOXED` ist nur noch die Gegenprobe: widerspricht der Wert der Messung, bricht der Lauf mit 3 ab. Frueher genuegte ein beliebiges Wort in dieser Variablen, um den Lauf durchzulassen.
 
 **Im Hintergrund (Terminal kann geschlossen werden):**
 ```bash
@@ -260,7 +262,7 @@ pkill -f "claude.*dangerously"
 ## Lektion 6: Worauf du achten musst
 
 ### API-Kosten
-Jeder Headless-Run verbraucht API-Credits. Nightshift zaehlt sie mit: `nightshift-cost.sh` summiert die usage-Felder aus der stream-json-Ausgabe, schaetzt die Dollar aus einer datierten Preistabelle und beendet den Lauf am Budget mit Exit-Code 9. Die Zahl im Receipt ist eine Schaetzung, die Rechnung steht unter console.anthropic.com.
+Jeder Headless-Run verbraucht API-Credits. Nightshift zaehlt sie mit: `nightshift-cost.sh` summiert die usage-Felder aus der stream-json-Ausgabe, schaetzt die Dollar aus einer datierten Preistabelle und beendet am Budget die Prozessgruppe von Claude mit Exit-Code 9. Gegen einen echten Lauf gemessen lag die Schaetzung bei 0.25860 USD, Claude selbst meldete 0.25863 USD fuer dieselbe Anfrage. Ein Modell, das die Tabelle nicht kennt, wird mit dem Doppelten der teuersten bekannten Zeile gerechnet: ein neueres Modell kann teurer sein als alles in der Tabelle. Steht im Strom kein einziges usage-Ereignis, etwa weil sich das Ausgabeformat geaendert hat, schreibt der Zaehler `unbekannt` und keine Null. Die Zahl im Receipt bleibt eine Schaetzung, die Rechnung steht unter console.anthropic.com.
 
 ### Der Lauf ohne Isolation bricht ab
 `nightshift-run.sh` prueft vor dem Claude-Aufruf, wie es eingesperrt ist: Container, Seatbelt oder nichts. Bei nichts endet der Lauf mit Exit-Code 3. `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` ist der bewusste Weg daran vorbei.

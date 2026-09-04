@@ -194,10 +194,12 @@ Builds both images, mounts only the project as `/project`, runs the night, tears
 
 **With the seatbelt profile (macOS option):**
 ```bash
-NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
+sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
 ```
 
-A plain `./nightshift-run.sh` aborts with exit code 3. To run without isolation on purpose, set `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`.
+No environment variable is involved: the runner probes whether it really sits behind the profile. Under the profile it can list the project but not `/Users`, and that is what produces the `seatbelt` state.
+
+A plain `./nightshift-run.sh` aborts with exit code 3. To run without isolation on purpose, set `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`; the receipt then says `keine`. `NIGHTSHIFT_SANDBOXED` is a cross-check only: if its value disagrees with the measurement, the run aborts with 3. Any word at all used to be enough to pass this check.
 
 **Background (terminal can be closed):**
 ```bash
@@ -260,7 +262,7 @@ pkill -f "claude.*dangerously"
 ## Lesson 6: What to Watch Out For
 
 ### API Costs
-Every headless run consumes API credits. Nightshift counts them: `nightshift-cost.sh` sums the usage fields from the stream-json output, estimates the dollars from a dated price table and stops the run at the budget with exit code 9. The figure in the receipt is an estimate; the invoice is at console.anthropic.com.
+Every headless run consumes API credits. Nightshift counts them: `nightshift-cost.sh` sums the usage fields from the stream-json output, estimates the dollars from a dated price table and at the budget kills Claude's process group with exit code 9. Measured against a real run, the estimate came to 0.25860 USD where Claude itself reported 0.25863 USD for the same request. A model the table does not know is billed at twice the most expensive known row — a newer model can cost more than anything in the table. If the stream carries no usage events at all, a changed output format for instance, the counter writes `unbekannt` and not a zero. The figure in the receipt remains an estimate; the invoice is at console.anthropic.com.
 
 ### A Run Without Isolation Aborts
 `nightshift-run.sh` checks how it is fenced before it calls Claude: container, seatbelt or nothing. On nothing, the run ends with exit code 3. `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` is the deliberate way past it.

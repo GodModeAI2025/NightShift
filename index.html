@@ -1060,10 +1060,11 @@
 
     <div class="layer-detail">
       <h4><span class="badge">Layer 3</span> Isolation — Container by Default (Nightshift)</h4>
-      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. 24x7 does not have this yet.</p>
+      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. It measures the state rather than asking for it: the container by <code>/.dockerenv</code>, <code>/run/.containerenv</code>, <code>/proc/1/cgroup</code> or an overlay root, the profile by a probe that fails under it — the runner can list the project but not <code>/Users</code>. 24x7 does not have this yet.</p>
       <p style="margin-top: 12px;">The <code>sandbox-exec</code> profile remains the macOS option. It restricts Claude's filesystem writes at the kernel level: Claude can only write to the project directory and /tmp, and <code>rm -rf ~/</code> fails without the hook having to catch it.</p>
-      <p style="margin-top: 12px;">What the profile does not restrict: reads and network traffic. It grants <code>file-read*</code> on <code>$HOME/.claude</code> and <code>$HOME/.config</code>, and it allows outbound TCP on port 443 to any host. Your other projects' transcripts sit in the first directory, CLI tokens commonly in the second. Anything the run can read, it can also send. Call it a write boundary, not a security boundary. The <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a> has the threat model.</p>
-      <p style="margin-top: 12px;"><strong>Important:</strong> the seatbelt profile is a file, not a state. It only applies when you start with <code>NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh</code>. The container path (<code>./nightshift-docker.sh</code>) needs no such discipline and is the same route on Linux and macOS.</p>
+      <p style="margin-top: 12px;">What the profile does not restrict: reads outside the home directory, and network traffic. It denies <code>/Users</code> and <code>/home</code> but re-grants <code>$HOME/.claude</code> and <code>$HOME/.config</code>, and it allows outbound TCP on port 443 to any host. Your other projects' transcripts sit in the first directory, CLI tokens commonly in the second. Anything the run can read, it can also send. Call it a write boundary, not a security boundary. The <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a> has the threat model.</p>
+      <p style="margin-top: 12px;">The open read access is a concession. A profile listing only the few paths this one used to allow no longer starts any program on current macOS: measured on Darwin 27, <code>sandbox-exec -f nightshift-sandbox.sb /bin/echo hi</code> ends with SIGABRT, because the dyld cache lives outside that list. A profile under which nothing runs protects nobody.</p>
+      <p style="margin-top: 12px;"><strong>Important:</strong> the seatbelt profile is a file, not a state. It only applies when you start with <code>sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh</code>, and the runner checks that for itself. <code>NIGHTSHIFT_SANDBOXED</code> is a cross-check, not a switch — a value that disagrees with the measurement ends the run with exit code 3. Setting it grants nothing; a while ago any word in it did. The container path (<code>./nightshift-docker.sh</code>) needs no such discipline and is the same route on Linux and macOS.</p>
     </div>
 
     <div class="layer-detail">
@@ -1200,7 +1201,7 @@
 
     <div class="warning">
       <h4>API Costs</h4>
-      <p>Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. Nightshift counts them: the tokens from the <code>stream-json</code> stream are summed, the dollars estimated from a dated price table, and the run is stopped at the budget with exit code 9. The figure in the receipt is an estimate, the invoice is at console.anthropic.com. 24x7 has none of this — set idle to "sleep" there if cost is a concern, so Claude does not burn credits while the inbox is empty.</p>
+      <p>Both skills run Claude Code in headless mode. Every tool call, every file read, every response consumes API credits. Nightshift counts them: the tokens from the <code>stream-json</code> stream are summed, the dollars estimated from a dated price table, and at the budget Claude's whole process group is stopped with exit code 9. Measured against a real run, the estimate came to 0.25860 USD where Claude reported 0.25863 USD. A model the table does not know costs twice the most expensive known row, and a stream without any usage events yields <code>unbekannt</code>, not a zero. The figure in the receipt is an estimate, the invoice is at console.anthropic.com. 24x7 has none of this — set idle to "sleep" there if cost is a concern, so Claude does not burn credits while the inbox is empty.</p>
     </div>
 
     <div class="warning">
@@ -1305,7 +1306,7 @@
 <span class="cmd">./nightshift-docker.sh</span>
 
 <span class="comment"># Or the macOS option</span>
-NIGHTSHIFT_SANDBOXED=seatbelt <span class="cmd">sandbox-exec</span> <span class="flag">-f</span> nightshift-sandbox.sb <span class="cmd">./nightshift-run.sh</span>
+<span class="cmd">sandbox-exec</span> <span class="flag">-f</span> nightshift-sandbox.sb <span class="cmd">./nightshift-run.sh</span>
 
 <span class="comment"># In the morning: the receipt</span>
 <span class="cmd">cat</span> <span class="path">nightshift-receipts/</span>*/receipt.md

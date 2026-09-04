@@ -34,14 +34,23 @@ BUDGET_TOKENS = os.environ.get("NIGHTSHIFT_BUDGET_TOKENS", "0")
 # stream-json-Ausgabe: der erste passende Schluessel gewinnt.
 PREISE_STAND = "2026-06-24"
 PREISE = [
-    # Schluessel, Eingabe $/1M, Ausgabe $/1M
+    # Schluessel, Eingabe $/1M, Ausgabe $/1M. Der erste passende
+    # Schluessel gewinnt, deshalb stehen die genaueren Namen oben:
+    # "sonnet-4-6" muss vor "sonnet" liegen, sonst rechnet der Zaehler
+    # Sonnet 4.6 zum billigeren Sonnet-Tarif und das Budget greift zu
+    # spaet.
+    ("fable", 10.00, 50.00),
+    ("mythos", 10.00, 50.00),
     ("opus", 5.00, 25.00),
+    ("sonnet-4-6", 3.00, 15.00),
     ("sonnet", 2.00, 10.00),
     ("haiku", 1.00, 5.00),
 ]
-# Fallback, wenn kein Schluessel passt: die teuerste Zeile, damit eine
-# unbekannte Modellbezeichnung das Budget nicht unterschaetzt.
-PREIS_FALLBACK = max(PREISE, key=lambda zeile: zeile[2])
+# Passt kein Schluessel, rechnet der Zaehler mit der teuersten Zeile mal
+# diesem Faktor. Die teuerste bekannte Zeile allein genuegt nicht: ein
+# Modell, das nach PREISE_STAND erscheint, kann darueber liegen, und dann
+# unterschaetzt der Fallback genau die Zahl, gegen die er da ist.
+PREIS_AUFSCHLAG = 2.0
 
 # Hosts, die der Container erreichen darf. Alles andere blockt der
 # Egress-Proxy. api.anthropic.com genuegt fuer einen Lauf mit
@@ -412,16 +421,45 @@ BUDGET_USD="${NIGHTSHIFT_BUDGET_USD:-@@BUDGET_USD@@}"
 BUDGET_TOKENS="${NIGHTSHIFT_BUDGET_TOKENS:-@@BUDGET_TOKENS@@}"
 
 # ── Isolationspruefung ──────────────────────────────────────
-# Der Standardweg ist der Container (./nightshift-docker.sh). Das
-# Seatbelt-Profil bleibt als macOS-Option; der dort dokumentierte Aufruf
-# setzt NIGHTSHIFT_SANDBOXED=seatbelt. Wer beides nicht will, muss das
-# ausdruecklich sagen.
-if [ -n "${NIGHTSHIFT_SANDBOXED:-}" ]; then
-    ISOLATION="$NIGHTSHIFT_SANDBOXED"
-elif [ -f /.dockerenv ]; then
-    ISOLATION="docker"
-else
-    ISOLATION="keine"
+# Isolation wird gemessen, nicht behauptet. Frueher genuegte ein Wort in
+# NIGHTSHIFT_SANDBOXED, und jedes Wort kam durch; das Receipt hat dann
+# einen Zustand ausgewiesen, den niemand geprueft hatte. Jetzt entscheiden
+# zwei Sonden, und die Variable darf nur noch bestaetigen, was sie sehen.
+isolation_messen() {
+    # Container: Spuren, die die Laufzeitumgebung hinterlaesst und die
+    # niemand aus der Shell heraus faelschen muss. /.dockerenv legt
+    # Docker an, /run/.containerenv Podman; cgroup und der Overlay-Root
+    # fangen containerd und Kubernetes.
+    if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then
+        echo docker; return 0
+    fi
+    if grep -qaE '(docker|containerd|kubepods|libpod|lxc)' /proc/1/cgroup 2>/dev/null; then
+        echo docker; return 0
+    fi
+    if grep -qE '^overlay / ' /proc/mounts 2>/dev/null; then
+        echo docker; return 0
+    fi
+    # Seatbelt gibt es nur auf macOS. Die Sonde liest /Users: das
+    # nightshift-Profil verbietet genau das, eine nackte Shell kann es
+    # immer. Die Gegenprobe auf das Projekt schliesst den Fall aus, dass
+    # hier gerade ueberhaupt nichts lesbar ist.
+    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] \
+       && ls "$PROJEKT" >/dev/null 2>&1 \
+       && ! ls /Users >/dev/null 2>&1; then
+        echo seatbelt; return 0
+    fi
+    echo keine
+}
+
+ISOLATION="$(isolation_messen)"
+BEHAUPTET="${NIGHTSHIFT_SANDBOXED:-}"
+if [ -n "$BEHAUPTET" ] && [ "$BEHAUPTET" != "$ISOLATION" ]; then
+    echo "NIGHTSHIFT_SANDBOXED sagt '$BEHAUPTET', gemessen wurde '$ISOLATION'."
+    echo "   Die Variable schaltet keine Isolation frei, sie wird geprueft."
+    echo "   Standardweg:  ./nightshift-docker.sh"
+    echo "   macOS-Option: sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh"
+    echo "   Abbruch."
+    exit 3
 fi
 
 # PID-Lock: Verhindert doppelten Start
@@ -432,6 +470,38 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     exit 1
 fi
 echo $$ > "$PIDFILE"
+
+# Diese drei Namen muessen vor den Traps stehen: der Signalpfad greift
+# darauf zu, und unter "set -u" waere eine ungesetzte Variable dort ein
+# Fehler mitten im Beenden.
+CLAUDE_PIDDATEI="/tmp/nightshift-claude-$$.pid"
+RCDATEI="/tmp/nightshift-rc-$$"
+STOPMARKER="/tmp/nightshift-budget-stop-$$"
+PIPELINE_PGID=""
+# Frist, die die Pipeline nach dem Budget-Stop noch bekommt.
+STOPFRIST="${NIGHTSHIFT_STOPFRIST:-30}"
+
+# Claude beenden heisst: die Prozessgruppe beenden. Ein einzelnes
+# kill -TERM auf die PID laesst umgehaengte Enkel am Leben, und die
+# halten den Pipe-Deskriptor offen; der Lauf haengt dann, ohne dass noch
+# Geld fliesst. Der Runner startet claude deshalb mit eigener Gruppe
+# (set -m), die Gruppen-ID ist die PID.
+claude_gruppe_beenden() {
+    NS_PID=$(cat "$CLAUDE_PIDDATEI" 2>/dev/null)
+    case "${NS_PID:-}" in ''|*[!0-9]*) return 0 ;; esac
+    kill -TERM -- "-$NS_PID" 2>/dev/null || kill -TERM "$NS_PID" 2>/dev/null
+    sleep 3
+    kill -KILL -- "-$NS_PID" 2>/dev/null || kill -KILL "$NS_PID" 2>/dev/null
+    return 0
+}
+
+pipeline_beenden() {
+    case "${PIPELINE_PGID:-}" in ''|*[!0-9]*) return 0 ;; esac
+    kill -TERM -- "-$PIPELINE_PGID" 2>/dev/null
+    sleep 1
+    kill -KILL -- "-$PIPELINE_PGID" 2>/dev/null
+    return 0
+}
 
 # Graceful Shutdown, Exit-Code bleibt erhalten. Der Receipt entsteht hier
 # und damit auch dann, wenn der Lauf abgebrochen wurde.
@@ -448,8 +518,20 @@ cleanup() {
         bash "$PROJEKT/nightshift-receipt.sh" || true
     exit "$RC"
 }
-trap 'cleanup 143' SIGTERM
-trap 'cleanup 130' SIGINT
+
+# Auf ein Signal wird zuerst Claude beendet und erst danach der Receipt
+# geschrieben. Umgekehrt haette der Bediener eine Nacht fuer beendet
+# gehalten, waehrend claude --dangerously-skip-permissions weiterlief.
+signal_abbruch() {
+    trap - EXIT SIGTERM SIGINT
+    echo ""
+    echo "Signal empfangen. Claude wird beendet, danach kommt der Receipt."
+    claude_gruppe_beenden
+    pipeline_beenden
+    cleanup "$1"
+}
+trap 'signal_abbruch 143' SIGTERM
+trap 'signal_abbruch 130' SIGINT
 trap cleanup EXIT
 
 LOGFILE="/tmp/nightshift-$RUNID.log"
@@ -469,7 +551,7 @@ if [ "$ISOLATION" = "keine" ]; then
     echo "   Claude startet mit --dangerously-skip-permissions und haette"
     echo "   Zugriff auf alles, was dein Benutzerkonto erreicht."
     echo "   Standardweg:  ./nightshift-docker.sh"
-    echo "   macOS-Option: NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh"
+    echo "   macOS-Option: sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh"
     if [ "${NIGHTSHIFT_ALLOW_UNSANDBOXED:-0}" != "1" ]; then
         echo "   Abbruch. Bewusst ohne Isolation: NIGHTSHIFT_ALLOW_UNSANDBOXED=1 setzen."
         exit 3
@@ -497,15 +579,32 @@ if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; th
     echo "Uncommitted changes gefunden. Empfehlung: git stash"
 fi
 
-CLAUDE_PIDDATEI="/tmp/nightshift-claude-$$.pid"
-RCDATEI="/tmp/nightshift-rc-$$"
-STOPMARKER="/tmp/nightshift-budget-stop-$$"
 echo 0 > "$RCDATEI"
 
 # Claude laeuft im Hintergrund, damit seine PID bekannt ist: ohne sie
 # koennte der Kostenzaehler den Lauf nicht beenden. Der Exit-Code geht
 # ueber eine Datei, weil das Ende der Pipeline dem Zaehler gehoert.
+#
+# "set -m" gibt claude eine eigene Prozessgruppe. Nur so trifft der
+# Budget-Stop auch Enkelprozesse; ohne sie ueberlebt ein umgehaengtes
+# Kind den Stop und haelt die Pipe offen.
+#
+# --verbose ist nicht schmueckend: Claude Code lehnt
+# "--print --output-format stream-json" ohne diese Option ab und beendet
+# sich mit 1. Ohne sie laeuft ueberhaupt kein Lauf.
+#
+# </dev/null: in einer eigenen Prozessgruppe im Hintergrund waere ein
+# Lesen vom Terminal ein SIGTTIN und damit eine Nacht, die stillsteht,
+# ohne zu enden. Gemessen wurde das mit dieser Version nicht, der Prompt
+# steht ja im Argument; die Umleitung nimmt den Fall trotzdem heraus.
+#
+# Die Pipeline laeuft im Hintergrund und der Runner wartet mit "wait".
+# Ein Trap greift waehrend eines Vordergrund-Kommandos erst, wenn dieses
+# fertig ist; waehrend "wait" greift er sofort. Genau davon haengt ab, ob
+# "kill $PID" die Nacht wirklich beendet.
+set -m
 {
+    set -m
     claude -p \
       "Lies runbook.md und arbeite alle Punkte sequentiell ab. \
        Hake jeden erledigten Schritt mit [x] ab. \
@@ -514,13 +613,44 @@ echo 0 > "$RCDATEI"
        Am Ende: git add -A && git commit -m '@@AUFGABE_KURZ@@'" \
       --dangerously-skip-permissions \
       --output-format stream-json \
-      2>&1 &
-    echo $! > "$CLAUDE_PIDDATEI"
-    wait $!
+      --verbose \
+      </dev/null 2>&1 &
+    NS_CLAUDE=$!
+    echo "$NS_CLAUDE" > "$CLAUDE_PIDDATEI"
+    set +m
+    wait "$NS_CLAUDE"
     echo $? > "$RCDATEI"
 } | tee -a "$LOGFILE" \
   | bash "$PROJEKT/nightshift-cost.sh" \
-        "$KOSTENDATEI" "$BUDGET_USD" "$BUDGET_TOKENS" "$CLAUDE_PIDDATEI" "$STOPMARKER"
+        "$KOSTENDATEI" "$BUDGET_USD" "$BUDGET_TOKENS" "$CLAUDE_PIDDATEI" "$STOPMARKER" &
+PIPELINE_PID=$!
+PIPELINE_PGID=$(jobs -p %+ 2>/dev/null | head -1)
+case "${PIPELINE_PGID:-}" in ''|*[!0-9]*) PIPELINE_PGID="" ;; esac
+set +m
+
+# Harte Zeitgrenze nach dem Budget-Stop. Sobald der Marker liegt, hat die
+# Pipeline STOPFRIST Sekunden; danach wird sie beendet. Ein Lauf, der nach
+# dem Stop nicht endet, kostet zwar nichts mehr, aber der Receipt kommt
+# nicht und ein Watchdog sieht eine Nacht ohne Ende.
+(
+    while kill -0 "$PIPELINE_PID" 2>/dev/null; do
+        if [ -f "$STOPMARKER" ]; then
+            sleep "$STOPFRIST"
+            if kill -0 "$PIPELINE_PID" 2>/dev/null; then
+                echo "STOPFRIST: Pipeline haengt ${STOPFRIST}s nach dem Budget-Stop, wird beendet." >&2
+                claude_gruppe_beenden
+                pipeline_beenden
+            fi
+            exit 0
+        fi
+        sleep 1
+    done
+) &
+WACHHUND_PID=$!
+
+wait "$PIPELINE_PID"
+kill "$WACHHUND_PID" 2>/dev/null
+wait "$WACHHUND_PID" 2>/dev/null
 
 CLAUDE_RC=$(cat "$RCDATEI" 2>/dev/null || echo 1)
 case "$CLAUDE_RC" in ''|*[!0-9]*) CLAUDE_RC=1 ;; esac
@@ -598,23 +728,26 @@ done
 SANDBOX_SB = f"""(version 1)
 (deny default)
 
+; Was dieses Profil leistet: es begrenzt das Schreiben auf das Projekt
+; und /tmp und nimmt dem Lauf den Blick in fremde Home-Verzeichnisse.
+; Es begrenzt nicht das Lesen des uebrigen Systems und nicht den
+; Netzverkehr auf 443. Der Container kann beides, dieses Profil nicht.
+;
+; Warum das Lesen offen ist: ein Profil, das nur die Pfade unten erlaubt,
+; startet auf aktuellem macOS ueberhaupt kein Programm mehr. Der
+; dyld-Cache liegt heute ausserhalb dieser Liste, und schon /bin/echo
+; endet dann mit SIGABRT. Ein Profil, unter dem nichts laeuft, schuetzt
+; niemanden.
+
 (allow process-fork process-exec)
 (allow signal (target self))
+(allow sysctl-read)
+(allow mach-lookup)
+(allow system-socket)
+(allow network-outbound (remote tcp "*:443"))
 
-(allow file-read* (subpath "/usr"))
-(allow file-read* (subpath "/bin"))
-(allow file-read* (subpath "/Library"))
-(allow file-read* (subpath "/opt/homebrew"))
-(allow file-read* (subpath "/private/tmp"))
-(allow file-read* (subpath "/private/var"))
-(allow file-read* (subpath "/dev"))
-(allow file-read* (subpath "/etc"))
-(allow file-read* (subpath "/var"))
-
-(allow file-read* file-write* (subpath "{PROJEKTPFAD}"))
-(allow file-read* file-write* (subpath "/tmp"))
-(allow file-read* file-write* (subpath "/private/tmp"))
-
+(allow file-read*)
+(deny file-read* (subpath "/Users") (subpath "/home"))
 (allow file-read* (subpath "{HOMEDIR}/.claude"))
 (allow file-read* (subpath "{HOMEDIR}/.npm-global"))
 (allow file-read* (subpath "{HOMEDIR}/.config"))
@@ -622,10 +755,19 @@ SANDBOX_SB = f"""(version 1)
 (allow file-read* (subpath "{HOMEDIR}/.nvm"))
 (allow file-read* (subpath "{HOMEDIR}/.cargo"))
 
-(allow network-outbound (remote tcp "*:443"))
-(allow system-socket)
-(allow sysctl-read)
-(allow mach-lookup)
+; Ohne diese Geraete laeuft keine Shell: schon "irgendwas >/dev/null"
+; scheitert sonst mit "Operation not permitted".
+(allow file-write* (literal "/dev/null") (literal "/dev/zero")
+                   (literal "/dev/random") (literal "/dev/urandom")
+                   (literal "/dev/stdout") (literal "/dev/stderr")
+                   (literal "/dev/tty") (literal "/dev/dtracehelper")
+                   (literal "/dev/ptmx"))
+
+(allow file-read* file-write* (subpath "/tmp"))
+(allow file-read* file-write* (subpath "/private/tmp"))
+; Zuletzt, damit die Projektfreigabe die Home-Sperre oben schlaegt, wenn
+; das Projekt unterhalb von /Users liegt.
+(allow file-read* file-write* (subpath "{PROJEKTPFAD}"))
 """
 
 # ── Docker: der Standardweg fuer Isolation ──────────────────
@@ -648,8 +790,10 @@ DOCKERFILE = r"""# syntax=docker/dockerfile:1
 # ─────────────────────────── runner ───────────────────────────
 FROM node:22-bookworm-slim AS runner
 
-# git fuer die Commits, jq fuer Hook und Kostenzaehler, procps fuer den
-# Budget-Stop (pkill), ca-certificates fuer TLS durch den Proxy.
+# git fuer die Commits, jq fuer Hook und Kostenzaehler, procps fuers
+# Nachsehen, was noch laeuft, ca-certificates fuer TLS durch den Proxy.
+# Der Budget-Stop selbst braucht kein Werkzeug mehr: er beendet die
+# Prozessgruppe mit dem kill der Shell.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq procps \
@@ -657,10 +801,11 @@ RUN apt-get update \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-# Der Runner erkennt daran, dass er isoliert laeuft, und traegt es in den
-# Morning Receipt ein. NIGHTSHIFT_PROJEKT haelt den Pfad im Container
-# beweglich: das Projekt liegt hier unter /project, nicht unter dem Pfad,
-# der beim Generieren gesetzt war.
+# NIGHTSHIFT_SANDBOXED ist hier nur die Gegenprobe: der Runner misst
+# selbst am Kernel, ob er im Container sitzt, und bricht ab, wenn die
+# Variable etwas anderes behauptet. NIGHTSHIFT_PROJEKT haelt den Pfad im
+# Container beweglich: das Projekt liegt hier unter /project, nicht unter
+# dem Pfad, der beim Generieren gesetzt war.
 ENV NIGHTSHIFT_SANDBOXED=docker \
     NIGHTSHIFT_PROJEKT=/project \
     HOME=/home/node \
@@ -853,6 +998,7 @@ STOPMARKER="${5:-/tmp/nightshift-budget-stop}"
 
 PREISE="@@PREISE@@"
 PREISE_STAND="@@PREISE_STAND@@"
+PREIS_AUFSCHLAG="@@PREIS_AUFSCHLAG@@"
 
 mkdir -p "$(dirname "$ZUSTAND")" 2>/dev/null
 
@@ -874,13 +1020,15 @@ ENDE
 claude_beenden() {
     [ -n "$PIDDATEI" ] || return 0
     PID=$(cat "$PIDDATEI" 2>/dev/null)
-    [ -n "${PID:-}" ] || return 0
-    # Erst die Kinder, sonst halten sie die Pipe offen und der Lauf haengt.
-    pkill -P "$PID" 2>/dev/null
-    kill -TERM "$PID" 2>/dev/null
+    case "${PID:-}" in ''|*[!0-9]*) return 0 ;; esac
+    # Die ganze Prozessgruppe, nicht nur der Prozess und seine direkten
+    # Kinder. "pkill -P" trifft genau eine Generation; ein umgehaengter
+    # Enkel haelt danach den Pipe-Deskriptor und der Lauf endet nie. Der
+    # Runner startet claude mit eigener Gruppe (set -m), deren
+    # Gruppen-ID die PID ist.
+    kill -TERM -- "-$PID" 2>/dev/null || kill -TERM "$PID" 2>/dev/null
     sleep 3
-    pkill -9 -P "$PID" 2>/dev/null
-    kill -KILL "$PID" 2>/dev/null
+    kill -KILL -- "-$PID" 2>/dev/null || kill -KILL "$PID" 2>/dev/null
     return 0
 }
 
@@ -895,14 +1043,19 @@ rm -f "$STOPMARKER"
 jq -R -r --unbuffered '
   fromjson? // empty
   | if (.type // "") == "result"
-    then ["ergebnis", ((.total_cost_usd // 0) | tostring), "0", "0", "0"]
+    then ["ergebnis", ((.total_cost_usd // 0) | tostring), "0", "0", "0", "0"]
     else ( (.message // {}) as $m
            | ($m.usage // {}) as $u
            | select(($u | type) == "object" and ($u | length) > 0)
+           | ($u.cache_creation // {}) as $c
+           | (($c.ephemeral_5m_input_tokens // 0)) as $fuenf
+           | (($u.cache_creation_input_tokens
+               // ($fuenf + ($c.ephemeral_1h_input_tokens // 0)))) as $gesamt
            | [ ($m.model // "unbekannt"),
                (($u.input_tokens // 0) | tostring),
                (($u.output_tokens // 0) | tostring),
-               (($u.cache_creation_input_tokens // 0) | tostring),
+               ($fuenf | tostring),
+               (($gesamt - $fuenf) | tostring),
                (($u.cache_read_input_tokens // 0) | tostring) ] )
     end
   | @tsv
@@ -913,6 +1066,7 @@ jq -R -r --unbuffered '
     -v BUDGET_TOKENS="$BUDGET_TOKENS" \
     -v STOPMARKER="$STOPMARKER" \
     -v PREISE="$PREISE" \
+    -v AUFSCHLAG="$PREIS_AUFSCHLAG" \
     -v STAND="$PREISE_STAND" '
 BEGIN {
     anzahl = split(PREISE, zeilen, ";")
@@ -920,13 +1074,19 @@ BEGIN {
         split(zeilen[i], feld, ":")
         schluessel[i] = feld[1]; preis_ein[i] = feld[2]; preis_aus[i] = feld[3]
     }
-    # Schaetzwerte: Cache-Schreiben kostet mehr, Cache-Lesen deutlich
-    # weniger als frische Eingabe.
-    faktor_cache_schreiben = 1.25
+    # Cache-Schreiben kostet mehr, Cache-Lesen deutlich weniger als
+    # frische Eingabe. Fuenf Minuten Haltbarkeit kosten das 1,25-fache,
+    # eine Stunde das Doppelte. Ein einziger Faktor 1,25 fuer beides hat
+    # einen gemessenen Lauf um 37 Prozent zu niedrig geschaetzt
+    # (0.1637 statt 0.2586 USD), und das Budget greift dann zu spaet.
+    # Cache-Schreiben ohne Aufschluesselung zaehlt zum teureren Satz.
+    faktor_cache_5min = 1.25
+    faktor_cache_1std = 2.00
     faktor_cache_lesen = 0.10
-    ein = 0; aus = 0; cs = 0; cl = 0; usd = 0; ereignisse = 0
+    ein = 0; aus = 0; cs5 = 0; cs1 = 0; cl = 0; usd = 0; ereignisse = 0
     gemeldet_usd = "unbekannt"
     gestoppt = 0
+    fallback = 0
 }
 function teuerste(   i, groesster, idx) {
     groesster = -1; idx = 1
@@ -935,10 +1095,31 @@ function teuerste(   i, groesster, idx) {
 }
 function preisindex(modell,   i, klein) {
     klein = tolower(modell)
+    fallback = 0
     for (i = 1; i <= anzahl; i++) if (index(klein, schluessel[i]) > 0) return i
-    # Unbekanntes Modell wird mit der teuersten Zeile gerechnet, damit das
-    # Budget nicht unterschaetzt wird.
+    # Unbekanntes Modell: teuerste bekannte Zeile mal Aufschlag. Die
+    # teuerste Zeile allein reicht nicht, ein Modell nach PREISE_STAND
+    # kann darueber liegen, und dann unterschaetzt gerade der Fallback.
+    fallback = 1
     return teuerste()
+}
+function schreiben_unbekannt(grund) {
+    printf("{\n") > ZUSTAND
+    printf("  \"status\": \"unbekannt\",\n") > ZUSTAND
+    printf("  \"grund\": \"%s\",\n", grund) > ZUSTAND
+    printf("  \"tokens_ein\": \"unbekannt\",\n") > ZUSTAND
+    printf("  \"tokens_aus\": \"unbekannt\",\n") > ZUSTAND
+    printf("  \"tokens_gesamt\": \"unbekannt\",\n") > ZUSTAND
+    printf("  \"usd_geschaetzt\": \"unbekannt\",\n") > ZUSTAND
+    printf("  \"usd_gemeldet\": %s,\n",
+           (gemeldet_usd == "unbekannt" ? "\"unbekannt\"" : gemeldet_usd)) > ZUSTAND
+    printf("  \"budget_usd\": %s,\n", BUDGET_USD) > ZUSTAND
+    printf("  \"budget_tokens\": %s,\n", BUDGET_TOKENS) > ZUSTAND
+    printf("  \"budget_ueberschritten\": false,\n") > ZUSTAND
+    printf("  \"ereignisse\": 0,\n") > ZUSTAND
+    printf("  \"preise_stand\": \"%s\"\n", STAND) > ZUSTAND
+    printf("}\n") > ZUSTAND
+    close(ZUSTAND)
 }
 function schreiben(   ueber) {
     ueber = (gestoppt ? "true" : "false")
@@ -946,7 +1127,7 @@ function schreiben(   ueber) {
     printf("  \"status\": \"gemessen\",\n") > ZUSTAND
     printf("  \"tokens_ein\": %d,\n", ein) > ZUSTAND
     printf("  \"tokens_aus\": %d,\n", aus) > ZUSTAND
-    printf("  \"tokens_cache_schreiben\": %d,\n", cs) > ZUSTAND
+    printf("  \"tokens_cache_schreiben\": %d,\n", cs5 + cs1) > ZUSTAND
     printf("  \"tokens_cache_lesen\": %d,\n", cl) > ZUSTAND
     printf("  \"tokens_gesamt\": %d,\n", ein + aus) > ZUSTAND
     printf("  \"usd_geschaetzt\": %.4f,\n", usd) > ZUSTAND
@@ -964,10 +1145,12 @@ function schreiben(   ueber) {
     if ($1 == "ergebnis") { gemeldet_usd = $2; schreiben(); next }
     ereignisse++
     i = preisindex($1)
-    ein += $2 + 0; aus += $3 + 0; cs += $4 + 0; cl += $5 + 0
-    usd += (($2 + 0) + ($4 + 0) * faktor_cache_schreiben + ($5 + 0) * faktor_cache_lesen) \
-           / 1000000 * (preis_ein[i] + 0)
-    usd += ($3 + 0) / 1000000 * (preis_aus[i] + 0)
+    aufschlag = (fallback ? (AUFSCHLAG + 0) : 1)
+    ein += $2 + 0; aus += $3 + 0; cs5 += $4 + 0; cs1 += $5 + 0; cl += $6 + 0
+    usd += (($2 + 0) + ($4 + 0) * faktor_cache_5min + ($5 + 0) * faktor_cache_1std \
+            + ($6 + 0) * faktor_cache_lesen) \
+           / 1000000 * (preis_ein[i] + 0) * aufschlag
+    usd += ($3 + 0) / 1000000 * (preis_aus[i] + 0) * aufschlag
     schreiben()
     if ((BUDGET_USD + 0) > 0 && usd >= (BUDGET_USD + 0)) {
         gestoppt = 1
@@ -985,7 +1168,17 @@ function schreiben(   ueber) {
         exit 9
     }
 }
-END { if (!gestoppt) schreiben() }
+END {
+    if (gestoppt) exit 9
+    # Kein einziges usage-Ereignis im Strom: dann sind die Tokens
+    # unbekannt und nicht null. Eine gemessene Null waere eine Aussage,
+    # die hier niemand pruefen konnte, und genau so entstand
+    # "0.0000 USD (Status: gemessen)" im Receipt.
+    if (ereignisse == 0)
+        schreiben_unbekannt("keine usage-Ereignisse im Strom, Ausgabeformat unbekannt")
+    else
+        schreiben()
+}
 '
 
 if [ -f "$STOPMARKER" ]; then
@@ -993,7 +1186,9 @@ if [ -f "$STOPMARKER" ]; then
     exit 9
 fi
 exit 0
-""".replace("@@PREISE@@", _PREISE_AWK).replace("@@PREISE_STAND@@", PREISE_STAND)
+""".replace("@@PREISE@@", _PREISE_AWK).replace("@@PREISE_STAND@@", PREISE_STAND).replace(
+    "@@PREIS_AUFSCHLAG@@", "%.2f" % PREIS_AUFSCHLAG
+)
 
 
 # ── Morning Receipt ─────────────────────────────────────────
@@ -1158,7 +1353,14 @@ esac
     printf '| Commit | %s |\n' "$COMMIT"
     printf '| Diff | %s Dateien, +%s / -%s |\n' "$DATEIEN" "$PLUS" "$MINUS"
     printf '| Tokens ein / aus | %s / %s |\n' "$TOKENS_EIN" "$TOKENS_AUS"
-    printf '| Kosten geschaetzt | %s USD (Status: %s) |\n' "$USD" "$KOSTEN_STATUS"
+    # Ohne Messung steht hier keine Zahl. "0.0000 USD (Status: gemessen)"
+    # war die Zeile, die genau das Vertrauen erzeugt hat, das sie nicht
+    # tragen konnte.
+    if [ "$USD" = "unbekannt" ]; then
+        printf '| Kosten geschaetzt | unbekannt (Status: %s) |\n' "$KOSTEN_STATUS"
+    else
+        printf '| Kosten geschaetzt | %s USD (Status: %s) |\n' "$USD" "$KOSTEN_STATUS"
+    fi
     printf '| Budget-Stop | %s |\n' "$BUDGET_STOP"
     printf '| Stall-Warnungen | %s |\n' "$STALL"
     printf '| decisions.md | %s Zeilen |\n' "$ENTSCHEIDUNGEN"
@@ -1171,9 +1373,11 @@ esac
     printf '\n## Naechster Schritt\n\n'
     printf 'git log -1 --stat, dann runbook.md und decisions.md lesen.\n'
     printf '\n"unbekannt" heisst: dieser Lauf konnte den Wert nicht ermitteln.\n'
-    printf 'Kosten bleiben unbekannt, wenn jq fehlt oder das Ausgabeformat\n'
-    printf 'von Claude sich geaendert hat. Isolation bleibt unbekannt, wenn\n'
-    printf 'der Runner ohne Container und ohne Seatbelt-Profil lief.\n'
+    printf 'Kosten bleiben unbekannt, wenn jq fehlt oder im Strom kein\n'
+    printf 'einziges usage-Ereignis stand, das Ausgabeformat sich also\n'
+    printf 'geaendert hat. Die Isolation ist gemessen: "docker" heisst, der\n'
+    printf 'Kernel hat den Container bestaetigt, "seatbelt", dass eine Sonde\n'
+    printf 'am Profil gescheitert ist, "keine", dass beides nicht zutraf.\n'
 } > "$ZIEL/receipt.md"
 
 echo "Receipt: $ZIEL/receipt.json und $ZIEL/receipt.md"
@@ -1242,22 +1446,26 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## Isolation
 
-`nightshift-run.sh` refuses to start without isolation. It detects three states:
+`nightshift-run.sh` refuses to start without isolation. The state is
+**measured, not declared** — an environment variable cannot unlock it:
 
-| State | How it is reached | What it means |
-|---|---|---|
-| `docker` | `./nightshift-docker.sh` | Only `{PROJEKTPFAD}` is mounted, as `/project`. No home directory, no `~/.claude`, no neighbouring projects. Outbound traffic goes through a proxy that allows {NETZ_ALLOWLIST_TEXT} and answers everything else with 403. |
-| `seatbelt` | `NIGHTSHIFT_SANDBOXED=seatbelt sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh` | macOS only, kernel-enforced writes. Reads outside the project and outbound traffic stay open. Apple has deprecated `sandbox-exec`. |
-| `keine` | plain `./nightshift-run.sh` | The run aborts with exit code 3. Deliberate opt-out: `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`. |
+| State | How it is reached | How it is verified | What it means |
+|---|---|---|---|
+| `docker` | `./nightshift-docker.sh` | `/.dockerenv`, `/run/.containerenv`, `/proc/1/cgroup` or an overlay root | Only `{PROJEKTPFAD}` is mounted, as `/project`. No home directory, no `~/.claude`, no neighbouring projects. Outbound traffic goes through a proxy that allows {NETZ_ALLOWLIST_TEXT} and answers everything else with 403. |
+| `seatbelt` | `sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh` | the runner can list the project but not `/Users` — under the profile that read is denied | macOS only, kernel-enforced writes. Reads of the rest of the system and outbound traffic on 443 stay open. Apple has deprecated `sandbox-exec`. |
+| `keine` | plain `./nightshift-run.sh` | neither probe answered | The run aborts with exit code 3. Deliberate opt-out: `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`, and the receipt then says `keine`. |
+
+`NIGHTSHIFT_SANDBOXED` is a cross-check, not a switch: if what it claims
+differs from what was measured, the run aborts with exit code 3. Setting it
+grants nothing.
 
 The state ends up in the receipt, so afterwards you can tell how the run was fenced.
 
 ```bash
-./nightshift-docker.sh                                     # Container, the default
-NIGHTSHIFT_SANDBOXED=seatbelt \\
-  sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh # macOS option
-NIGHTSHIFT_ALLOW_UNSANDBOXED=1 ./nightshift-run.sh          # No isolation, on purpose
-./nightshift-run-bg.sh                                     # Background, host
+./nightshift-docker.sh                                      # Container, the default
+sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh    # macOS option
+NIGHTSHIFT_ALLOW_UNSANDBOXED=1 ./nightshift-run.sh           # No isolation, on purpose
+./nightshift-run-bg.sh                                      # Background, host
 ```
 
 ## Budget
@@ -1272,8 +1480,13 @@ NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh   # additional token ceilin
 
 The dollar figure is an estimate from the price table of {PREISE_STAND}
 (`nightshift-cost.sh`). Prices change; the invoice is the Anthropic
-dashboard, not this file. Without `jq` there is no measurement, and the
-receipt says `unbekannt` instead of pretending a zero.
+dashboard, not this file. A model name the table does not know is billed at
+the most expensive known row times {PREIS_AUFSCHLAG:.1f} — the top row alone
+would still undercount a model released after {PREISE_STAND}.
+
+There is no measurement without `jq`, and none when the stream carries no
+`usage` events at all — a changed output format, for instance. In both cases
+the receipt says `unbekannt` instead of pretending a zero.
 
 ## Morning Receipt
 

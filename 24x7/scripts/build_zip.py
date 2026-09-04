@@ -302,6 +302,7 @@ REGELN:
 - Wenn fertig: Session beenden" \\
       --dangerously-skip-permissions \\
       --output-format stream-json \\
+      --verbose \\
       >> "$LOGFILE" 2>&1
 
     EXIT_CODE=$?
@@ -340,6 +341,7 @@ Workspace-Root ist $WORKSPACE.
 Wenn fertig: Session beenden." \\
         --dangerously-skip-permissions \\
         --output-format stream-json \\
+        --verbose \\
         >> "$LOGFILE" 2>&1
 
       if [ -d "$IDLE_DIR" ] && [ "$(ls -A "$IDLE_DIR/output/" 2>/dev/null)" ]; then

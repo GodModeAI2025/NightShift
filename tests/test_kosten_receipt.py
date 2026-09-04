@@ -9,8 +9,10 @@ beenden, Receipt schreiben.
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 import helfer
@@ -30,10 +32,19 @@ EREIGNIS = (
 def stub_schreiben(pfad, zeilen, nachlauf="", mit_kind=False):
     with open(pfad, "w") as datei:
         datei.write("#!/bin/bash\n")
+        # Die eigene PID, damit ein Test nachsehen kann, ob der Prozess
+        # nach einem Signal wirklich weg ist.
+        datei.write('echo $$ > "$NS_TEST_CLAUDE_PID"\n')
         if mit_kind:
-            # Ein Kind, das die Pipe offen haelt. Wer beim Budget-Stopp nur
-            # den Elternprozess abschiesst, haengt hier fest.
-            datei.write("sleep 120 &\n")
+            # Ein Enkel, der die Pipe offen haelt und umgehaengt wird: der
+            # Zwischenprozess beendet sich sofort, danach haengt der Enkel
+            # an init. "pkill -P" auf die claude-PID findet ihn dann nicht
+            # mehr, ein Kill der ganzen Prozessgruppe schon. Genau dieser
+            # Prozess hielt Runner und tee nach dem Budget-Stop am Leben.
+            datei.write(
+                "bash -c 'sleep 120 & echo $! > \"$NS_TEST_ENKEL_PID\"' &\n"
+                "wait $!\n"
+            )
         for zeile in zeilen:
             datei.write("echo '%s'\nsleep 0.2\n" % zeile)
         datei.write(nachlauf)
@@ -71,21 +82,42 @@ class LaufTest(unittest.TestCase):
         )
         return arbeit, stubordner
 
-    def starte(self, arbeit, stubordner, zusatz):
+    def umgebung_bauen(self, arbeit, stubordner, zusatz):
         umgebung = dict(os.environ)
         umgebung["PATH"] = stubordner + os.pathsep + umgebung.get("PATH", "")
+        umgebung["NS_TEST_CLAUDE_PID"] = os.path.join(arbeit, "claude.pid")
+        umgebung["NS_TEST_ENKEL_PID"] = os.path.join(arbeit, "enkel.pid")
         umgebung["NIGHTSHIFT_PROJEKT"] = arbeit
-        umgebung["NIGHTSHIFT_SANDBOXED"] = "test"
+        # Kein NIGHTSHIFT_SANDBOXED mehr: die Variable schaltet keine
+        # Isolation frei. Die Tests nehmen den dokumentierten Verzicht.
+        umgebung.pop("NIGHTSHIFT_SANDBOXED", None)
+        umgebung["NIGHTSHIFT_ALLOW_UNSANDBOXED"] = "1"
         umgebung.update(zusatz)
+        return umgebung
+
+    def starte(self, arbeit, stubordner, zusatz):
         lauf = subprocess.run(
             ["bash", os.path.join(arbeit, "nightshift-run.sh")],
             cwd=arbeit,
-            env=umgebung,
+            env=self.umgebung_bauen(arbeit, stubordner, zusatz),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=180,
         )
         return lauf.returncode, lauf.stdout.decode("utf-8", "replace")
+
+    def lebt(self, pidpfad):
+        """True, solange der im Pidfile genannte Prozess noch existiert."""
+        try:
+            with open(pidpfad) as datei:
+                pid = int(datei.read().strip())
+        except (IOError, OSError, ValueError):
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
 
     def receipt(self, arbeit):
         wurzel = os.path.join(arbeit, "nightshift-receipts")
@@ -103,10 +135,21 @@ class LaufTest(unittest.TestCase):
             [EREIGNIS] * 20, "sleep 120\n", mit_kind=True
         )
         try:
+            beginn = time.time()
             code, ausgabe = self.starte(
                 arbeit, stubordner, {"NIGHTSHIFT_BUDGET_USD": "3.00"}
             )
+            dauer = time.time() - beginn
             self.assertEqual(9, code, ausgabe)
+            # Der Stop muss den Lauf wirklich beenden. Vor dieser Runde
+            # kill te der Zaehler nur direkte Kinder; der umgehaengte
+            # Enkel hielt den Pipe-Deskriptor und damit Runner und tee
+            # gemessene 2:33 min am Leben.
+            self.assertLess(dauer, 60, "Lauf haengt nach dem Budget-Stop: %.0fs" % dauer)
+            self.assertFalse(
+                self.lebt(os.path.join(arbeit, "enkel.pid")),
+                "Enkelprozess hat den Budget-Stop ueberlebt",
+            )
             self.assertIn("BUDGET ERREICHT", ausgabe)
             self.assertIn("BUDGET-STOP", ausgabe)
 
@@ -146,7 +189,7 @@ class LaufTest(unittest.TestCase):
             # der eigenen Schaetzung vermischt.
             self.assertEqual(1.75, kosten["usd_gemeldet"])
             self.assertEqual(0, daten["exit_code"])
-            self.assertEqual("test", daten["isolation"])
+            self.assertEqual("keine", daten["isolation"])
             # false ist eine Aussage, kein fehlender Wert.
             self.assertIs(False, daten["kosten"]["budget_stop"])
         finally:
@@ -211,7 +254,7 @@ class LaufTest(unittest.TestCase):
                         os.symlink(pfad, ziel)
             shutil.copy(os.path.join(stubordner, "claude"), os.path.join(leer, "claude"))
             code, ausgabe = self.starte(
-                arbeit, leer, {"PATH": leer, "NIGHTSHIFT_SANDBOXED": "test"}
+                arbeit, leer, {"PATH": leer, "NIGHTSHIFT_ALLOW_UNSANDBOXED": "1"}
             )
             self.assertEqual(0, code, ausgabe)
             ordner, daten, text = self.receipt(arbeit)
@@ -250,6 +293,140 @@ class LaufTest(unittest.TestCase):
             self.assertIn("# Morning Receipt", text)
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
+
+    def test_kill_term_beendet_claude_und_nicht_erst_die_pipeline(self):
+        """Das dokumentierte "kill $PID" muss wirken.
+
+        Gemessen vor dieser Runde: 19 s nach kill -TERM liefen Runner und
+        claude --dangerously-skip-permissions unveraendert weiter, weil
+        der EXIT-Trap erst nach der Vordergrund-Pipeline greift.
+        """
+        arbeit, stubordner = self.arbeitsordner([EREIGNIS], "sleep 300\n")
+        prozess = None
+        try:
+            prozess = subprocess.Popen(
+                ["bash", os.path.join(arbeit, "nightshift-run.sh")],
+                cwd=arbeit,
+                env=self.umgebung_bauen(arbeit, stubordner, {}),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            claude_pid = os.path.join(arbeit, "claude.pid")
+            for _ in range(200):
+                if self.lebt(claude_pid):
+                    break
+                time.sleep(0.1)
+            self.assertTrue(self.lebt(claude_pid), "Stub ist nie gestartet")
+
+            prozess.send_signal(signal.SIGTERM)
+            ausgabe = prozess.communicate(timeout=60)[0].decode("utf-8", "replace")
+
+            for _ in range(100):
+                if not self.lebt(claude_pid):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(
+                self.lebt(claude_pid),
+                "claude laeuft nach kill -TERM auf den Runner weiter:\n" + ausgabe,
+            )
+            self.assertIn("Signal empfangen", ausgabe)
+            # Der Receipt entsteht trotzdem, nur eben nach dem Beenden.
+            _, daten, _ = self.receipt(arbeit)
+            self.assertEqual(143, daten["exit_code"])
+        finally:
+            if prozess is not None and prozess.poll() is None:
+                prozess.kill()
+                prozess.wait()
+            shutil.rmtree(arbeit, ignore_errors=True)
+
+    def test_unbekanntes_format_mit_jq_bleibt_unbekannt(self):
+        """Mit jq und einer Ausgabe, die kein stream-json ist.
+
+        Der Fall, der bisher fehlte: der Zaehler schrieb "gemessen" mit 0
+        Tokens und 0.0000 USD, und der Receipt druckte diese Null direkt
+        ueber seinem eigenen Hinweis, Kosten koennten unbekannt sein.
+        """
+        if shutil.which("jq") is None:
+            raise unittest.SkipTest("jq nicht vorhanden, dieser Fall braucht es")
+        arbeit, stubordner = self.arbeitsordner(
+            ["Claude arbeitet.", "Fertig, keine Zeile ist JSON."]
+        )
+        try:
+            code, ausgabe = self.starte(arbeit, stubordner, {})
+            self.assertEqual(0, code, ausgabe)
+            ordner, daten, text = self.receipt(arbeit)
+            with open(os.path.join(ordner, "cost.json")) as datei:
+                kosten = json.load(datei)
+            self.assertEqual("unbekannt", kosten["status"])
+            self.assertEqual("unbekannt", kosten["tokens_ein"])
+            self.assertEqual("unbekannt", kosten["usd_geschaetzt"])
+            self.assertEqual("unbekannt", daten["kosten"]["status"])
+            self.assertEqual("unbekannt", daten["kosten"]["usd_geschaetzt"])
+            self.assertNotIn("0.0000 USD (Status: gemessen)", text)
+            self.assertIn("unbekannt (Status: unbekannt)", text)
+        finally:
+            shutil.rmtree(arbeit, ignore_errors=True)
+
+    def test_preistabelle_unterschaetzt_die_teuren_modelle_nicht(self):
+        """Je 1 Mio Tokens ein und aus, gegen die Preisliste gerechnet."""
+        arbeit, stubordner = self.arbeitsordner([])
+        kosten_skript = os.path.join(arbeit, "nightshift-cost.sh")
+        zustand = os.path.join(arbeit, "preis.json")
+        erwartet = {
+            "claude-fable-5-1": 60.00,
+            "claude-opus-5": 30.00,
+            "claude-sonnet-4-6": 18.00,
+            "claude-sonnet-5": 12.00,
+            "claude-haiku-4-5": 6.00,
+        }
+        try:
+            for modell, soll in erwartet.items():
+                zeile = (
+                    '{"type":"assistant","message":{"model":"%s","usage":'
+                    '{"input_tokens":1000000,"output_tokens":1000000}}}' % modell
+                )
+                subprocess.run(
+                    ["bash", kosten_skript, zustand, "0", "0", "",
+                     os.path.join(arbeit, "marker")],
+                    input=(zeile + "\n").encode("utf-8"),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True,
+                )
+                with open(zustand) as datei:
+                    ist = json.load(datei)["usd_geschaetzt"]
+                self.assertAlmostEqual(soll, ist, places=2, msg=modell)
+
+            # Unbekanntes Modell: teuerste Zeile mal Aufschlag, also mehr
+            # als das teuerste bekannte Modell. Vorher lag der Fallback
+            # unter dem Fable-Tarif und damit unter der Wirklichkeit.
+            zeile = (
+                '{"type":"assistant","message":{"model":"claude-neu-9","usage":'
+                '{"input_tokens":1000000,"output_tokens":1000000}}}'
+            )
+            subprocess.run(
+                ["bash", kosten_skript, zustand, "0", "0", "",
+                 os.path.join(arbeit, "marker")],
+                input=(zeile + "\n").encode("utf-8"),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True,
+            )
+            with open(zustand) as datei:
+                ist = json.load(datei)["usd_geschaetzt"]
+            self.assertGreater(ist, max(erwartet.values()))
+        finally:
+            shutil.rmtree(arbeit, ignore_errors=True)
+
+    def test_runner_ruft_claude_mit_verbose(self):
+        """Ohne --verbose lehnt Claude Code stream-json im Print-Modus ab.
+
+        Gemessen mit 2.1.261: "When using --print,
+        --output-format=stream-json requires --verbose", Exit 1. Dann
+        startet kein Lauf, und alles danach ist nur gegen einen Stub belegt.
+        """
+        run_sh = self.datei("nightshift-run.sh")
+        # Der Aufruf selbst, nicht der Kommentar darueber.
+        beginn = run_sh.index("--dangerously-skip-permissions")
+        aufruf = run_sh[beginn : run_sh.index("2>&1", beginn)]
+        self.assertIn("--output-format stream-json", aufruf)
+        self.assertIn("--verbose", aufruf)
 
 
 if __name__ == "__main__":

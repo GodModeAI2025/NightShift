@@ -238,7 +238,7 @@ chmod +x *.sh
 
 Zeigt alle 60 Sekunden den Status:
 ```
-✅ 14:32:01: OK (12s) | inbox: 3 | working: 1 | done: 8 | failed: 0
+✅ 14:32:01: OK (12s) | 📥3 🔄1 ✅8 ❌0
 ```
 
 ### Task einwerfen (jederzeit)

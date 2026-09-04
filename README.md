@@ -1,5 +1,7 @@
 # Nightshift & 24x7 — Autonomous Claude Code Skills
 
+[![CI](https://github.com/GodModeAI2025/NightShift/actions/workflows/ci.yml/badge.svg)](https://github.com/GodModeAI2025/NightShift/actions/workflows/ci.yml)
+
 Two skills that turn Claude Code from an interactive tool into an autonomous worker. Nightshift runs planned project work overnight. 24x7 runs an endless task queue.
 
 **Landing page:** [godmodeai2025.github.io/NightShift](https://godmodeai2025.github.io/NightShift/)
@@ -39,7 +41,7 @@ A markdown file with checkboxes that Claude reads before each step. After contex
 
 **Layer 2: Hooks (Guardrails)**
 Claude Code hooks are scripts that fire on specific events:
-- `PreToolUse` — Runs before every tool call. Blocks destructive commands like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`.
+- `PreToolUse` — Carries `"matcher": "Bash"`, so it runs before every Bash call and never sees `Write` or `Edit`. Blocks command patterns like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`.
 - `PostToolUse` — Runs after every tool call. Writes a heartbeat timestamp to a log file.
 - `SessionStart` (compact matcher) — Fires after every context compression. Injects "re-read the runbook" into Claude's context.
 - `Stop` (Nightshift only) — Fires every time Claude finishes a response. Every 5 completed steps, reminds Claude of autonomy zones and error budget.
@@ -47,7 +49,7 @@ Claude Code hooks are scripts that fire on specific events:
 Hooks fire even with `--dangerously-skip-permissions`. A `PreToolUse` hook returning exit code 2 blocks the tool call unconditionally.
 
 **Layer 3: macOS Sandbox (Kernel-Level Isolation)**
-A `sandbox-exec` profile that restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and `/tmp`. Even if Claude tries `rm -rf ~/`, the kernel blocks it — the hook doesn't even need to catch it. This is the real safety net.
+A `sandbox-exec` profile that restricts Claude's filesystem access at the kernel level. Claude can only write to the project directory and `/tmp`. Even if Claude tries `rm -rf ~/`, the kernel blocks it, without the hook having to catch it. This is the only layer a kernel enforces, and it enforces writes: reads outside the project and outbound network traffic stay open. See [What the Sandbox Does Not Cover](#what-the-sandbox-does-not-cover) and [SECURITY.md](SECURITY.md).
 
 Note: `sandbox-exec` is deprecated by Apple but still functional on current macOS versions. It uses Seatbelt, a kernel-level sandbox framework.
 
@@ -118,7 +120,7 @@ Before generating the setup, the skill validates the runbook against 15 checks:
 
 **Autonomy:** Has all three zones (green/yellow/red)? Has error budget? Error budget has a stop condition?
 
-The setup is only generated when all 15 checks pass — or when you explicitly override.
+Validation is not a gate. The generator prints the score and writes the ZIP even when checks fail, so a failed check is a prompt to fix the runbook, not a stop.
 
 ### Checkpoint Repetition
 
@@ -160,17 +162,13 @@ The 24x7 skill uses the same pattern at workspace level: each task reads `decisi
 
 ### Install the Skills
 
+There is no release and no tag yet, so there is no `.skill` file to download. Clone the repo and copy both skill directories:
+
 ```bash
-# Download and install Nightshift
-curl -L https://github.com/GodModeAI2025/NightShift/releases/latest/download/nightshift.skill -o nightshift.skill
-unzip nightshift.skill -d ~/.claude/skills/
-
-# Download and install 24x7
-curl -L https://github.com/GodModeAI2025/NightShift/releases/latest/download/24x7.skill -o 24x7.skill
-unzip 24x7.skill -d ~/.claude/skills/
+git clone https://github.com/GodModeAI2025/NightShift.git
+mkdir -p ~/.claude/skills
+cp -r NightShift/nightshift NightShift/24x7 ~/.claude/skills/
 ```
-
-Or manually: download the `nightshift/` and `24x7/` directories from this repo and place them in `~/.claude/skills/`.
 
 ### Verify Installation
 
@@ -382,7 +380,7 @@ The runner picks it up automatically. Results appear in `outbox/my-task/output/`
 ./watchdog.sh
 ```
 
-Shows live status: `inbox: 3 | working: 1 | done: 12 | failed: 0`
+Shows live status: `✅ 14:32:01: OK (12s) | 📥3 🔄1 ✅12 ❌0`
 
 ### Step 5: Collect Results
 
@@ -422,15 +420,32 @@ The generated `sandbox.sb` / `nightshift-sandbox.sb` file is just a profile. You
 sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh
 ```
 
-Without `sandbox-exec`, Claude has full access to everything your user account can reach. The `PreToolUse` hook catches obvious destructive commands, but it's pattern-matching — not a real security boundary. The sandbox is the real security boundary.
+Without `sandbox-exec`, Claude has full access to everything your user account can reach. The `PreToolUse` hook greps the command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
 
-On Linux, there is no `sandbox-exec`. Use Docker or a dedicated user account instead:
+### What the Sandbox Does Not Cover
+
+The sandbox is the only layer that a kernel enforces, and what it enforces is writes. It restricts neither reads nor network traffic. The generated profile grants `file-read*` on `$HOME/.claude` and `$HOME/.config`, and it allows `(allow network-outbound (remote tcp "*:443"))` without a destination. `~/.claude` holds the transcripts of your other projects, `~/.config` commonly holds CLI tokens. Anything the run can read, it can also send.
+
+Calling the sandbox a security boundary is only accurate for writes to the filesystem. [SECURITY.md](SECURITY.md) has the threat model, the trust boundaries, and the list of known gaps.
+
+### Linux Has No sandbox-exec
+
+Docker with the project mounted is the route that gives you an enforced boundary. A dedicated user account scopes file access with Unix permissions, which is weaker and takes more than three lines:
 
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /your/project /home/clauderunner/project
-sudo -u clauderunner ./nightshift-run.sh
+sudo chown -R clauderunner: /home/clauderunner/project
+sudo -u clauderunner /home/clauderunner/project/nightshift-run.sh
 ```
+
+Three things about that recipe:
+
+- The copy that `sudo cp -r` creates belongs to root. Without the `chown`, the runner account cannot write in its own working copy.
+- `nightshift-run.sh` starts with a `cd` to the path that was set when the setup was generated. Regenerate the setup with `NIGHTSHIFT_PROJECT=/home/clauderunner/project`, otherwise the run leaves the new account and works in the original directory.
+- The new account has no Claude Code credentials. Authenticate as that user once before the first run.
+
+Even then the account reaches the network and can read every world-readable file on the machine. This is permission scoping, not isolation.
 
 ### Git Is Your Undo Button (Nightshift)
 
@@ -504,9 +519,29 @@ kill $(cat /tmp/24x7.pid)
 | `.claude/settings.json` | PreToolUse + PostToolUse hooks |
 | `CLAUDE.md` | Workspace rules: autonomy zones, error tolerance, workspace memory (decisions.md) |
 | `idle/idle-tasks.md` | Configurable idle behavior |
-| `inbox/example-task/` | Example task with task.md template |
+| `inbox/beispiel-task/` | Example task with task.md template |
 
 ---
+
+## Roadmap
+
+Ordered by what blocks users today. No dates attached, this is a private project.
+
+**Next**
+
+- **Release assets.** Installing means cloning the repo and copying two directories, because there is no release and no tag. Packaging `nightshift/` and `24x7/` as downloadable assets and tagging a version needs no code change.
+- **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
+- **Egress control.** The seatbelt profile allows outbound 443 to any host. Restricting it to the Anthropic API is what turns a write boundary into something closer to a real one.
+
+**After that**
+
+- **Linux isolation that holds.** A Docker Compose setup with the project mounted, so the Linux route stops being a user-account workaround.
+- **A cost ceiling that stops a run.** Both runners print a warning at startup and that is the entire mechanism. Nightshift has no timeout at all.
+- **A morning receipt.** One JSON file per run: steps done against steps open, `git diff --stat`, the decisions log, the exit code.
+
+**Test coverage**
+
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, and drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands. The generated shell scripts are only checked for syntax; nothing executes a runner, a watchdog, or the sandbox profile. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
 ## Acknowledgments
 

@@ -266,9 +266,9 @@ Stop:     kill 12345
 
 Shows live status every 60 seconds:
 ```
-✅ 14:32:01: OK (12s) | inbox: 3 | working: 1 | done: 8 | failed: 0
-✅ 14:33:01: OK (5s)  | inbox: 2 | working: 1 | done: 8 | failed: 0
-✅ 14:34:01: OK (3s)  | inbox: 2 | working: 0 | done: 9 | failed: 0
+✅ 14:32:01: OK (12s) | 📥3 🔄1 ✅8 ❌0
+✅ 14:33:01: OK (5s) | 📥2 🔄1 ✅8 ❌0
+✅ 14:34:01: OK (3s) | 📥2 🔄0 ✅9 ❌0
 ```
 
 ### Drop a Task While Running
@@ -342,7 +342,7 @@ Each task gets a fresh Claude session. Claude does not remember the previous tas
 Default: 60 minutes. Tasks taking longer are killed and moved to `failed/`. Adjust `MAX_SECONDS` in `runner.sh` if needed.
 
 ### Workspace Isolation
-Claude can only work within the workspace. The CLAUDE.md rules and the sandbox enforce this. Claude cannot access your home directory, other projects, or the internet (except the Anthropic API).
+Writes are the part that holds: with the sandbox profile active, Claude can only write to the workspace and /tmp. Everything else is an agreement in CLAUDE.md, not enforcement. The profile grants read access to `$HOME/.claude` and `$HOME/.config`, and it allows outbound TCP on port 443 to any host, so reads outside the workspace and traffic to arbitrary endpoints are possible. Without `sandbox-exec` even the write restriction is gone.
 
 ---
 

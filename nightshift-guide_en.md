@@ -59,7 +59,7 @@ The flag `--dangerously-skip-permissions` removes all approval prompts. But with
 Download the skill from the repository:
 
 ```bash
-# Option A: Download the .skill file
+# Download the skill definition (there is no .skill release)
 curl -L https://github.com/GodModeAI2025/NightShift/raw/main/nightshift/SKILL.md -o /tmp/nightshift-skill.md
 
 # Create the skill directory
@@ -114,7 +114,7 @@ Claude validates the runbook against 15 checks:
 - Safety: No `rm -rf`? No hardcoded secrets? All paths inside project?
 - Autonomy: Three zones (green/yellow/red) defined? Error budget with stop condition?
 
-If validation fails, Claude suggests fixes. The setup is only generated when all checks pass.
+If validation fails, Claude suggests fixes. The generator writes the ZIP either way, so a failed check is a prompt to fix the runbook, not a stop.
 
 ### 3.4 Setup Files
 
@@ -258,12 +258,14 @@ Vague steps produce vague results. Review the runbook before starting. If you ne
 On runs longer than 20 minutes, context compression happens. The hooks handle it, but for 30+ step runbooks, quality degrades. Stay under 20 steps per run.
 
 ### Linux Users
-`sandbox-exec` is macOS only. Use Docker or a dedicated user account:
+`sandbox-exec` is macOS only. Docker with the project mounted is the route that gives you an enforced boundary. A dedicated user account only scopes file permissions and needs three more steps:
 ```bash
 sudo useradd -m clauderunner
 sudo cp -r /your/project /home/clauderunner/project
-sudo -u clauderunner ./nightshift-run.sh
+sudo chown -R clauderunner: /home/clauderunner/project
+sudo -u clauderunner /home/clauderunner/project/nightshift-run.sh
 ```
+Without the `chown`, the copy belongs to root and the runner cannot write in its own working directory. The generated `nightshift-run.sh` also carries a hardcoded `cd` to the path set at generation time, so regenerate the setup with `NIGHTSHIFT_PROJECT=/home/clauderunner/project` or the run lands back in the original directory. The new account needs its own Claude Code login.
 
 ---
 

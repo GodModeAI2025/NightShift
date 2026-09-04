@@ -122,7 +122,8 @@ class LaufTest(unittest.TestCase):
 
             self.assertEqual(9, daten["exit_code"])
             self.assertEqual(200000, daten["kosten"]["tokens_ein"])
-            self.assertEqual("true", daten["kosten"]["budget_stop"])
+            # Ein Wahrheitswert gehoert als Wahrheitswert ins JSON.
+            self.assertIs(True, daten["kosten"]["budget_stop"])
             self.assertIn("Budget erreicht", text)
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
@@ -143,9 +144,35 @@ class LaufTest(unittest.TestCase):
             self.assertEqual(100000, kosten["tokens_ein"])
             # Der von Claude gemeldete Betrag wird uebernommen, aber nicht mit
             # der eigenen Schaetzung vermischt.
-            self.assertEqual("1.75", kosten["usd_gemeldet"])
+            self.assertEqual(1.75, kosten["usd_gemeldet"])
             self.assertEqual(0, daten["exit_code"])
             self.assertEqual("test", daten["isolation"])
+        finally:
+            shutil.rmtree(arbeit, ignore_errors=True)
+
+    def test_diff_im_git_projekt_wird_gezaehlt_statt_unbekannt(self):
+        """Ein erfolgreiches git diff ohne Ausgabe heisst null, nicht unbekannt.
+
+        Genau dieser Fall trifft jeden ersten Lauf: ein einziger Commit, also
+        kein HEAD~1, und ein sauberer Arbeitsbaum.
+        """
+        arbeit, stubordner = self.arbeitsordner([EREIGNIS])
+        try:
+            for befehl in (
+                ["git", "init", "-q", "."],
+                ["git", "add", "-A"],
+                ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                 "commit", "-q", "-m", "start"],
+            ):
+                subprocess.run(befehl, cwd=arbeit, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, check=True)
+            code, ausgabe = self.starte(arbeit, stubordner, {})
+            self.assertEqual(0, code, ausgabe)
+            _, daten, _ = self.receipt(arbeit)
+            self.assertEqual(0, daten["diff"]["dateien"])
+            self.assertEqual(0, daten["diff"]["plus"])
+            self.assertEqual(0, daten["diff"]["minus"])
+            self.assertNotEqual("unbekannt", daten["git_commit"])
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
 

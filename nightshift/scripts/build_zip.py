@@ -950,7 +950,8 @@ function schreiben(   ueber) {
     printf("  \"tokens_cache_lesen\": %d,\n", cl) > ZUSTAND
     printf("  \"tokens_gesamt\": %d,\n", ein + aus) > ZUSTAND
     printf("  \"usd_geschaetzt\": %.4f,\n", usd) > ZUSTAND
-    printf("  \"usd_gemeldet\": \"%s\",\n", gemeldet_usd) > ZUSTAND
+    printf("  \"usd_gemeldet\": %s,\n",
+           (gemeldet_usd == "unbekannt" ? "\"unbekannt\"" : gemeldet_usd)) > ZUSTAND
     printf("  \"budget_usd\": %s,\n", BUDGET_USD) > ZUSTAND
     printf("  \"budget_tokens\": %s,\n", BUDGET_TOKENS) > ZUSTAND
     printf("  \"budget_ueberschritten\": %s,\n", ueber) > ZUSTAND
@@ -1039,13 +1040,24 @@ fi
 COMMIT="unbekannt"; DATEIEN="unbekannt"; PLUS="unbekannt"; MINUS="unbekannt"
 if git rev-parse --git-dir >/dev/null 2>&1; then
     COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unbekannt)
-    KURZ=$(git diff --shortstat HEAD~1 2>/dev/null || git diff --shortstat 2>/dev/null || true)
-    if [ -n "${KURZ:-}" ]; then
+    # Ein erfolgreiches git diff ohne Ausgabe heisst null Aenderungen und
+    # nicht "unbekannt". Nur wenn beide Aufrufe scheitern, etwa weil es
+    # keinen Vorgaengercommit gibt und kein Arbeitsbaum da ist, bleibt das
+    # Feld unbekannt.
+    KURZ=""
+    if KURZ=$(git diff --shortstat HEAD~1 2>/dev/null); then
+        GEMESSEN=1
+    elif KURZ=$(git diff --shortstat 2>/dev/null); then
+        GEMESSEN=1
+    else
+        GEMESSEN=0
+    fi
+    if [ "$GEMESSEN" = "1" ]; then
         DATEIEN=$(printf '%s' "$KURZ" | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' | head -1)
         PLUS=$(printf '%s' "$KURZ" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' | head -1)
         MINUS=$(printf '%s' "$KURZ" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' | head -1)
+        DATEIEN="${DATEIEN:-0}"; PLUS="${PLUS:-0}"; MINUS="${MINUS:-0}"
     fi
-    DATEIEN="${DATEIEN:-0}"; PLUS="${PLUS:-0}"; MINUS="${MINUS:-0}"
 fi
 
 # ── Entscheidungen ──────────────────────────────────────────
@@ -1083,6 +1095,14 @@ json_wert() {
     esac
 }
 
+# true und false gehoeren unquotiert ins JSON, alles andere ist ein String.
+json_bool() {
+    case "$1" in
+        true|false) printf '%s' "$1" ;;
+        *) printf '"%s"' "${1:-unbekannt}" ;;
+    esac
+}
+
 if command -v jq >/dev/null 2>&1; then
     printf '%s\n' "$OFFENE_LISTE" | jq -R -s 'split("\n") | map(select(length > 0))' > "$ZIEL/.offen.json"
 else
@@ -1105,9 +1125,9 @@ fi
     printf '  "git_commit": "%s",\n' "$COMMIT"
     printf '  "diff": { "dateien": %s, "plus": %s, "minus": %s },\n' \
         "$(json_wert "$DATEIEN")" "$(json_wert "$PLUS")" "$(json_wert "$MINUS")"
-    printf '  "kosten": { "status": "%s", "tokens_ein": %s, "tokens_aus": %s, "usd_geschaetzt": %s, "budget_stop": "%s" },\n' \
+    printf '  "kosten": { "status": "%s", "tokens_ein": %s, "tokens_aus": %s, "usd_geschaetzt": %s, "budget_stop": %s },\n' \
         "$KOSTEN_STATUS" "$(json_wert "$TOKENS_EIN")" "$(json_wert "$TOKENS_AUS")" \
-        "$(json_wert "$USD")" "$BUDGET_STOP"
+        "$(json_wert "$USD")" "$(json_bool "$BUDGET_STOP")"
     printf '  "entscheidungen_zeilen": %s,\n' "$(json_wert "$ENTSCHEIDUNGEN")"
     printf '  "stall_warnungen": %s\n' "$(json_wert "$STALL")"
     printf '}\n'

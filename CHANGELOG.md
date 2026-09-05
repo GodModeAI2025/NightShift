@@ -12,17 +12,18 @@ cut by tagging `v` plus the content of `VERSION`.
 
 ## [Unreleased]
 
-Container, cost governor and receipt are still Nightshift only; 24x7 keeps the
-state of 1.0.0 there. The path barrier of the PreToolUse hook is in both.
+Cost governor and receipt are still Nightshift only; 24x7 keeps the state of
+1.0.0 there. Container isolation and the path barrier of the PreToolUse hook
+are in both.
 
 ### Added
 
 - A second `PreToolUse` entry in both generated setups:
   `"matcher": "Write|Edit|MultiEdit|NotebookEdit"`. It resolves the target path
-  of the call — `~/` becomes the home directory, `.` and `..` are resolved, a
-  relative path is resolved against the working directory Claude Code sends —
-  and ends with exit code 2 for every target outside the project or workspace
-  directory. The root comes from `NIGHTSHIFT_PROJEKT` or
+  of the call. `~/` becomes the home directory, `.` and `..` are resolved, and
+  a relative path is resolved against the working directory Claude Code sends
+  with the call. Every target outside the project or workspace directory ends
+  with exit code 2. The root comes from `NIGHTSHIFT_PROJEKT` or
   `CLAUDE_24X7_WORKSPACE` at run time, so the same hook fences the run inside
   the container, where the project sits at `/project`. Without `jq`, and for an
   input without a path, it blocks instead of waving the call through.
@@ -35,7 +36,7 @@ state of 1.0.0 there. The path barrier of the PreToolUse hook is in both.
   ships inside both `.skill` artifacts next to `build_zip.py`, and a test
   unpacks an artifact and runs the generator from that location, because the
   repository layout and the installed layout are two different places.
-- `tests/test_pfad_schranke.py`: 13 write targets that must be blocked and 9
+- `tests/test_pfad_schranke.py`: 14 write targets that must be blocked and 9
   that must pass, per skill, driven as real tool calls through the hook command
   taken out of the generated `settings.json`. Plus `Edit`, `MultiEdit` and
   `NotebookEdit` on both sides of the boundary, an input without a path, and a
@@ -45,6 +46,25 @@ state of 1.0.0 there. The path barrier of the PreToolUse hook is in both.
   symlinks inside the directory pointing out, `/tmp` versus `/private/tmp`,
   tools from MCP servers, and a `.claude/settings.json` that was never
   installed.
+- Container isolation for 24x7: `Dockerfile`, `docker-compose.yml` and
+  `24x7-docker.sh` in the generated setup. The workspace is mounted as
+  `/workspace` and is the only path from the host; the home directory lives in
+  a named volume; the runner hangs in an internal network whose only bridge
+  outward is the same allowlist proxy Nightshift uses. Root filesystem
+  read-only, all capabilities dropped, `no-new-privileges`, non-root user.
+  Unlike the Nightshift script this one starts a daemon: `up -d`, and
+  `./24x7-docker.sh --logs` follows the log. Tasks keep arriving in `inbox/`
+  on the host, because that directory is the mount.
+- Isolation detection in `runner.sh`, the same probe Nightshift runs:
+  `docker`, `seatbelt` or `keine`. Without isolation the runner ends with exit
+  code 3 before the task loop starts; `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` is the
+  documented way past it, `CLAUDE_24X7_SANDBOXED` is a cross-check that grants
+  nothing. Both checks sit before the `trap`, because the cleanup handler ends
+  with `exit 0` and would swallow the 3.
+- `WORKSPACE` in `runner.sh` and `runner-bg.sh` now comes from
+  `CLAUDE_24X7_WORKSPACE` and falls back to the generated path. The container
+  sets it to `/workspace`, and the path barrier of the hook reads the same
+  variable, so both agree on where the workspace is.
 
 - `Dockerfile` and `docker-compose.yml` in the generated Nightshift setup,
   plus `nightshift-docker.sh` to build and run it. The container mounts the
@@ -87,6 +107,16 @@ state of 1.0.0 there. The path barrier of the PreToolUse hook is in both.
 
 ### Changed
 
+- The 24x7 seatbelt profile is the fixed one. It carried the old
+  deny-by-default read rules, under which nothing starts on current macOS
+  (`sandbox-exec -f sandbox.sb /bin/echo hi` ended with SIGABRT); Nightshift's
+  profile was repaired in 1.0.0 and 24x7's was not. Both now come from one
+  template, and the test that starts a program under the profile runs for
+  both.
+- `Dockerfile`, `docker-compose.yml`, the docker script, the seatbelt profile
+  and the isolation check are one implementation in `gemeinsam.py`, filled
+  with the names of each skill. The generated Nightshift files are unchanged
+  byte for byte; that was the acceptance test for the move.
 - `nightshift-run.sh` takes the project path from `NIGHTSHIFT_PROJEKT` and
   falls back to the path from generation time. Without this the container
   would `cd` into the host path, which does not exist there.

@@ -300,8 +300,10 @@ mv failed/mein-task inbox/mein-task
 ### API-Kosten — Das größte Risiko
 24x7 erzeugt **kontinuierlich** API-Calls. Auch Idle-Tasks kosten Geld. Ein Runner mit 10 Tasks pro Tag kostet $20–100/Tag. Setze Idle auf `sleep` um Kosten bei leerer Inbox zu vermeiden. Überwache unter console.anthropic.com.
 
-### Sandbox ist nicht Standard
-Explizit aktivieren: `sandbox-exec -f sandbox.sb ./runner.sh`. Ohne sie hat Claude vollen Zugriff auf dein Benutzerkonto. Auf Linux: Docker verwenden.
+### Der Runner startet nicht ohne Isolation
+Standardweg ist der Container: `./24x7-docker.sh`. Er baut das Image und startet den Runner darin, der Workspace haengt unter `/workspace`, Tasks wirfst du weiter auf dem Host in `inbox/`. Ohne Container und ohne Seatbelt-Profil bricht `runner.sh` mit Exit 3 ab; bewusst ohne Isolation laufen laesst du ihn mit `CLAUDE_24X7_ALLOW_UNSANDBOXED=1`.
+
+Die macOS-Option bleibt `sandbox-exec -f sandbox.sb ./runner.sh`. Sie deckelt das Schreiben, nicht das Lesen und nicht den Netzverkehr. Der Watchdog laeuft nur beim Lauf auf dem Host mit: im Container liegt der Heartbeat in einem eigenen tmpfs, dort liest du stattdessen `docker compose logs -f 24x7`.
 
 Eine Haelfte greift auch ohne Profil: Der PreToolUse-Hook prueft den Zielpfad von Write, Edit, MultiEdit und NotebookEdit und beendet den Aufruf mit Exit 2, wenn er aus dem Workspace hinauszeigt. Ein Schreibvorgang, den ein Bash-Kommando ausfuehrt, und jedes Lesen bleiben davon unberuehrt.
 

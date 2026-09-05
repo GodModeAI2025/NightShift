@@ -1013,7 +1013,7 @@
       <div class="security-layer">
         <div class="num">1</div>
         <h4>PreToolUse Hooks</h4>
-        <p>Two barriers. One reads the command text and blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval &mdash; no pattern for fork bombs. The other reads the target path of Write, Edit and NotebookEdit and blocks every write outside the project.</p>
+        <p>Two barriers. One reads the command text and blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval. No pattern for fork bombs. The other reads the target path of Write, Edit and NotebookEdit and blocks every write outside the project.</p>
       </div>
       <div class="security-layer">
         <div class="num">2</div>
@@ -1060,8 +1060,8 @@
     </div>
 
     <div class="layer-detail">
-      <h4><span class="badge">Layer 3</span> Isolation — Container by Default (Nightshift)</h4>
-      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. It measures the state rather than asking for it: the container by <code>/.dockerenv</code>, <code>/run/.containerenv</code>, <code>/proc/1/cgroup</code> or an overlay root, the profile by a probe that fails under it — the runner can list the project but not <code>/Users</code>. 24x7 does not have this yet.</p>
+      <h4><span class="badge">Layer 3</span> Isolation — Container by Default</h4>
+      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. It measures the state rather than asking for it: the container by <code>/.dockerenv</code>, <code>/run/.containerenv</code>, <code>/proc/1/cgroup</code> or an overlay root, the profile by a probe that fails under it, since the runner can list the project but not <code>/Users</code>. 24x7 has the same container and the same check, with <code>./24x7-docker.sh</code>, the workspace at <code>/workspace</code> and <code>CLAUDE_24X7_ALLOW_UNSANDBOXED=1</code> as the opt-out.</p>
       <p style="margin-top: 12px;">The <code>sandbox-exec</code> profile remains the macOS option. It restricts Claude's filesystem writes at the kernel level: Claude can only write to the project directory and /tmp, and <code>rm -rf ~/</code> fails without the hook having to catch it.</p>
       <p style="margin-top: 12px;">What the profile does not restrict: reads outside the home directory, and network traffic. It denies <code>/Users</code> and <code>/home</code> but re-grants <code>$HOME/.claude</code> and <code>$HOME/.config</code>, and it allows outbound TCP on port 443 to any host. Your other projects' transcripts sit in the first directory, CLI tokens commonly in the second. Anything the run can read, it can also send. Call it a write boundary, not a security boundary. The <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a> has the threat model.</p>
       <p style="margin-top: 12px;">The open read access is a concession. A profile listing only the few paths this one used to allow no longer starts any program on current macOS: measured on Darwin 27, <code>sandbox-exec -f nightshift-sandbox.sb /bin/echo hi</code> ends with SIGABRT, because the dyld cache lives outside that list. A profile under which nothing runs protects nobody.</p>
@@ -1158,7 +1158,7 @@
         <div class="step-num">1</div>
         <div class="step-content">
           <h4>Install and Generate</h4>
-          <p>Install the skill from the latest release: <code>unzip 24x7.skill -d ~/.claude/skills/</code>. Then tell Claude: "Set up a 24x7 runner at /my/workspace with idle behavior cleanup". Claude generates the workspace structure with runner, watchdog, hooks, and sandbox.</p>
+          <p>Install the skill from the latest release: <code>unzip 24x7.skill -d ~/.claude/skills/</code>. Then tell Claude: "Set up a 24x7 runner at /my/workspace with idle behavior cleanup". Claude generates the workspace structure with runner, watchdog, hooks, container files, and sandbox profile.</p>
         </div>
       </div>
       <div class="step">
@@ -1222,7 +1222,7 @@
 
     <div class="warning">
       <h4>Docker Is the Route on Both Systems</h4>
-      <p><code>sandbox-exec</code> is macOS-only and deprecated by Apple, which is why Nightshift no longer builds on it. <code>./nightshift-docker.sh</code> runs the same way on Linux and macOS and is the sharper boundary, because reads and outbound traffic are fenced as well. A dedicated user account remains the weaker fallback without Docker, and it needs <code>NIGHTSHIFT_PROJEKT</code> so the run works in the copy rather than in the original directory, plus <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code>, because permission scoping is not isolation. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec-and-does-not-need-it">README</a> has the steps. 24x7 still has no isolation check and no container files.</p>
+      <p><code>sandbox-exec</code> is macOS-only and deprecated by Apple, which is why Nightshift no longer builds on it. <code>./nightshift-docker.sh</code> runs the same way on Linux and macOS and is the sharper boundary, because reads and outbound traffic are fenced as well. A dedicated user account remains the weaker fallback without Docker, and it needs <code>NIGHTSHIFT_PROJEKT</code> so the run works in the copy rather than in the original directory, plus <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code>, because permission scoping is not isolation. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec-and-does-not-need-it">README</a> has the steps. 24x7 works the same way, with <code>./24x7-docker.sh</code>.</p>
     </div>
 
     <div class="warning">

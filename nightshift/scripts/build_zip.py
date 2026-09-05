@@ -384,6 +384,19 @@ SETTINGS = {
     }
 }
 
+# Namen, die die Isolationspruefung aus gemeinsam.py braucht.
+_ISOLATION = {
+    "SANDBOXVAR": "NIGHTSHIFT_SANDBOXED",
+    "ALLOWVAR": "NIGHTSHIFT_ALLOW_UNSANDBOXED",
+    "PROFILNAME": "nightshift",
+    "PROFILDATEI": "nightshift-sandbox.sb",
+    "DOCKERSKRIPT": "nightshift-docker.sh",
+    "STARTSKRIPT": "nightshift-run.sh",
+    "GEGENSTAND": "das Projekt",
+    "GEGENSTAND_AKK": "das Projekt",
+    "PFADSHELL": "PROJEKT",
+}
+
 RUN_SH = (
 r"""#!/bin/bash
 set -uo pipefail
@@ -402,48 +415,7 @@ KOSTENDATEI="$ZIEL/cost.json"
 BUDGET_USD="${NIGHTSHIFT_BUDGET_USD:-@@BUDGET_USD@@}"
 BUDGET_TOKENS="${NIGHTSHIFT_BUDGET_TOKENS:-@@BUDGET_TOKENS@@}"
 
-# ── Isolationspruefung ──────────────────────────────────────
-# Isolation wird gemessen, nicht behauptet. Frueher genuegte ein Wort in
-# NIGHTSHIFT_SANDBOXED, und jedes Wort kam durch; das Receipt hat dann
-# einen Zustand ausgewiesen, den niemand geprueft hatte. Jetzt entscheiden
-# zwei Sonden, und die Variable darf nur noch bestaetigen, was sie sehen.
-isolation_messen() {
-    # Container: Spuren, die die Laufzeitumgebung hinterlaesst und die
-    # niemand aus der Shell heraus faelschen muss. /.dockerenv legt
-    # Docker an, /run/.containerenv Podman; cgroup und der Overlay-Root
-    # fangen containerd und Kubernetes.
-    if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then
-        echo docker; return 0
-    fi
-    if grep -qaE '(docker|containerd|kubepods|libpod|lxc)' /proc/1/cgroup 2>/dev/null; then
-        echo docker; return 0
-    fi
-    if grep -qE '^overlay / ' /proc/mounts 2>/dev/null; then
-        echo docker; return 0
-    fi
-    # Seatbelt gibt es nur auf macOS. Die Sonde liest /Users: das
-    # nightshift-Profil verbietet genau das, eine nackte Shell kann es
-    # immer. Die Gegenprobe auf das Projekt schliesst den Fall aus, dass
-    # hier gerade ueberhaupt nichts lesbar ist.
-    if [ "$(uname -s 2>/dev/null)" = "Darwin" ] \
-       && ls "$PROJEKT" >/dev/null 2>&1 \
-       && ! ls /Users >/dev/null 2>&1; then
-        echo seatbelt; return 0
-    fi
-    echo keine
-}
-
-ISOLATION="$(isolation_messen)"
-BEHAUPTET="${NIGHTSHIFT_SANDBOXED:-}"
-if [ -n "$BEHAUPTET" ] && [ "$BEHAUPTET" != "$ISOLATION" ]; then
-    echo "NIGHTSHIFT_SANDBOXED sagt '$BEHAUPTET', gemessen wurde '$ISOLATION'."
-    echo "   Die Variable schaltet keine Isolation frei, sie wird geprueft."
-    echo "   Standardweg:  ./nightshift-docker.sh"
-    echo "   macOS-Option: sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh"
-    echo "   Abbruch."
-    exit 3
-fi
-
+@@ISOLATION_MESSEN@@
 # PID-Lock: Verhindert doppelten Start
 PIDFILE="/tmp/nightshift.pid"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
@@ -528,19 +500,7 @@ echo "Receipt:   $ZIEL"
 echo "PID:       $$"
 echo ""
 
-if [ "$ISOLATION" = "keine" ]; then
-    echo "WARNUNG: Dieser Lauf ist nicht isoliert."
-    echo "   Claude startet mit --dangerously-skip-permissions und haette"
-    echo "   Zugriff auf alles, was dein Benutzerkonto erreicht."
-    echo "   Standardweg:  ./nightshift-docker.sh"
-    echo "   macOS-Option: sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh"
-    if [ "${NIGHTSHIFT_ALLOW_UNSANDBOXED:-0}" != "1" ]; then
-        echo "   Abbruch. Bewusst ohne Isolation: NIGHTSHIFT_ALLOW_UNSANDBOXED=1 setzen."
-        exit 3
-    fi
-    echo "   NIGHTSHIFT_ALLOW_UNSANDBOXED=1 ist gesetzt, der Lauf geht weiter."
-fi
-
+@@ISOLATION_ABBRUCH@@
 if [ "$ISOLATION" = "docker" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] \
    && [ ! -f "${HOME:-/home/node}/.claude/.credentials.json" ]; then
     echo "HINWEIS: Im Container ist weder ANTHROPIC_API_KEY gesetzt noch eine"
@@ -659,6 +619,11 @@ exit $CLAUDE_RC
     .replace("@@GENRE@@", GENRE)
     .replace("@@BUDGET_USD@@", BUDGET_USD)
     .replace("@@BUDGET_TOKENS@@", BUDGET_TOKENS)
+    # Die Isolationspruefung ist in beiden Runnern dieselbe. Sie steht in
+    # gemeinsam.py, damit eine Verschaerfung nicht in einem der beiden
+    # Skills haengen bleibt.
+    .replace("@@ISOLATION_MESSEN@@", gemeinsam.isolation_messen(_ISOLATION))
+    .replace("@@ISOLATION_ABBRUCH@@", gemeinsam.isolation_abbruch(_ISOLATION))
 )
 
 RUN_BG_SH = f"""#!/bin/bash
@@ -707,50 +672,14 @@ while true; do
 done
 """
 
-SANDBOX_SB = f"""(version 1)
-(deny default)
-
-; Was dieses Profil leistet: es begrenzt das Schreiben auf das Projekt
-; und /tmp und nimmt dem Lauf den Blick in fremde Home-Verzeichnisse.
-; Es begrenzt nicht das Lesen des uebrigen Systems und nicht den
-; Netzverkehr auf 443. Der Container kann beides, dieses Profil nicht.
-;
-; Warum das Lesen offen ist: ein Profil, das nur die Pfade unten erlaubt,
-; startet auf aktuellem macOS ueberhaupt kein Programm mehr. Der
-; dyld-Cache liegt heute ausserhalb dieser Liste, und schon /bin/echo
-; endet dann mit SIGABRT. Ein Profil, unter dem nichts laeuft, schuetzt
-; niemanden.
-
-(allow process-fork process-exec)
-(allow signal (target self))
-(allow sysctl-read)
-(allow mach-lookup)
-(allow system-socket)
-(allow network-outbound (remote tcp "*:443"))
-
-(allow file-read*)
-(deny file-read* (subpath "/Users") (subpath "/home"))
-(allow file-read* (subpath "{HOMEDIR}/.claude"))
-(allow file-read* (subpath "{HOMEDIR}/.npm-global"))
-(allow file-read* (subpath "{HOMEDIR}/.config"))
-(allow file-read* (subpath "{HOMEDIR}/.bun"))
-(allow file-read* (subpath "{HOMEDIR}/.nvm"))
-(allow file-read* (subpath "{HOMEDIR}/.cargo"))
-
-; Ohne diese Geraete laeuft keine Shell: schon "irgendwas >/dev/null"
-; scheitert sonst mit "Operation not permitted".
-(allow file-write* (literal "/dev/null") (literal "/dev/zero")
-                   (literal "/dev/random") (literal "/dev/urandom")
-                   (literal "/dev/stdout") (literal "/dev/stderr")
-                   (literal "/dev/tty") (literal "/dev/dtracehelper")
-                   (literal "/dev/ptmx"))
-
-(allow file-read* file-write* (subpath "/tmp"))
-(allow file-read* file-write* (subpath "/private/tmp"))
-; Zuletzt, damit die Projektfreigabe die Home-Sperre oben schlaegt, wenn
-; das Projekt unterhalb von /Users liegt.
-(allow file-read* file-write* (subpath "{PROJEKTPFAD}"))
-"""
+SANDBOX_SB = gemeinsam.sandbox_profil(
+    dict(
+        _ISOLATION,
+        HOME=HOMEDIR,
+        HOSTPFAD=PROJEKTPFAD,
+        FREIGABENAME="Projektfreigabe",
+    )
+)
 
 # ── Docker: der Standardweg fuer Isolation ──────────────────
 # Ein Dockerfile mit zwei Zielen. "runner" fuehrt Claude aus und haengt in
@@ -758,195 +687,38 @@ SANDBOX_SB = f"""(version 1)
 # laesst ausschliesslich die Hosts aus NETZ_ALLOWLIST durch. Damit ist der
 # Lauf nicht nur beim Schreiben begrenzt (das kann das Seatbelt-Profil auch),
 # sondern auch beim Lesen und beim Abfluss nach draussen.
-_ALLOWLIST_ARGS = " ".join(
-    "'^" + host.replace(".", "\\.") + "$'" for host in NETZ_ALLOWLIST
-)
+# ── Container: Gehaeuse aus gemeinsam.py ────────────────────
+# Dockerfile, Compose-Datei und Startskript stehen einmal in gemeinsam.py
+# und werden hier mit den Nightshift-Namen gefuellt. 24x7 fuellt dieselben
+# Vorlagen mit seinen eigenen. Was sich unterscheidet, ist die Wortliste,
+# nicht die Haertung.
+_CONTAINER = {
+    "TITEL": "Nightshift",
+    "MOUNT": "/project",
+    "DOCKERSKRIPT": "nightshift-docker.sh",
+    "STARTSKRIPT": "nightshift-run.sh",
+    "SANDBOXVAR": "NIGHTSHIFT_SANDBOXED",
+    "PFADVAR": "NIGHTSHIFT_PROJEKT",
+    "GEGENSTAND": "das Projekt",
+    "DIENST": "nightshift",
+    "HOSTPFAD": PROJEKTPFAD,
+    "SPEICHER": "4g",
+    "READMENAME": "README-nightshift.md",
+    "ZWECK": "Baut den Container und laesst den Nightshift darin laufen.",
+    "KOPF": "Nightshift, isoliert. Der Standardweg auf Linux und macOS.",
+    "WERKZEUGNOTIZ": (
+        "# Der Budget-Stop selbst braucht kein Werkzeug mehr: er beendet die\n"
+        "# Prozessgruppe mit dem kill der Shell."
+    ),
+    "ALLOWLIST": gemeinsam.allowlist_argumente(NETZ_ALLOWLIST),
+    "ZUSATZENV": (
+        '\n      NIGHTSHIFT_BUDGET_USD: "${NIGHTSHIFT_BUDGET_USD:-%s}"' % BUDGET_USD
+    ),
+}
 
-DOCKERFILE = r"""# syntax=docker/dockerfile:1
-# Nightshift-Container. Zwei Ziele, ein File:
-#   runner  laeuft Claude Code, sieht nur /project und kein offenes Netz
-#   egress  Proxy mit Allowlist, der einzige Weg nach draussen
-#
-# Bauen und starten uebernimmt ./nightshift-docker.sh.
-
-# ─────────────────────────── runner ───────────────────────────
-FROM node:22-bookworm-slim AS runner
-
-# git fuer die Commits, jq fuer Hook und Kostenzaehler, procps fuers
-# Nachsehen, was noch laeuft, ca-certificates fuer TLS durch den Proxy.
-# Der Budget-Stop selbst braucht kein Werkzeug mehr: er beendet die
-# Prozessgruppe mit dem kill der Shell.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq procps \
- && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g @anthropic-ai/claude-code
-
-# NIGHTSHIFT_SANDBOXED ist hier nur die Gegenprobe: der Runner misst
-# selbst am Kernel, ob er im Container sitzt, und bricht ab, wenn die
-# Variable etwas anderes behauptet. NIGHTSHIFT_PROJEKT haelt den Pfad im
-# Container beweglich: das Projekt liegt hier unter /project, nicht unter
-# dem Pfad, der beim Generieren gesetzt war.
-ENV NIGHTSHIFT_SANDBOXED=docker \
-    NIGHTSHIFT_PROJEKT=/project \
-    HOME=/home/node \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-
-WORKDIR /project
-USER node
-CMD ["bash", "/project/nightshift-run.sh"]
-
-# ─────────────────────────── egress ───────────────────────────
-FROM alpine:3.20 AS egress
-
-RUN apk add --no-cache tinyproxy
-
-# FilterDefaultDeny heisst: alles ist gesperrt, ausser den Zeilen in
-# /etc/tinyproxy/allowlist. Die Filter greifen auch fuer CONNECT, also
-# fuer HTTPS.
-#
-# Kein User/Group in der Konfiguration: der Container laeuft schon als
-# tinyproxy (USER weiter unten). Mit den Direktiven wuerde tinyproxy einen
-# setgid-Aufruf versuchen, und der scheitert, weil cap_drop ALL gesetzt ist.
-RUN printf '%s\n' \
-      'Port 8888' \
-      'Listen 0.0.0.0' \
-      'Timeout 600' \
-      'Allow 0.0.0.0/0' \
-      'ConnectPort 443' \
-      'Filter "/etc/tinyproxy/allowlist"' \
-      'FilterType ere' \
-      'FilterDefaultDeny Yes' \
-      'LogLevel Warning' \
-      'PidFile "/tmp/tinyproxy.pid"' \
-      > /etc/tinyproxy/tinyproxy.conf \
- && printf '%s\n' @@ALLOWLIST@@ > /etc/tinyproxy/allowlist
-
-EXPOSE 8888
-USER tinyproxy
-CMD ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]
-""".replace("@@ALLOWLIST@@", _ALLOWLIST_ARGS)
-
-
-DOCKER_COMPOSE = f"""# Nightshift, isoliert. Der Standardweg auf Linux und macOS.
-#
-#   ./nightshift-docker.sh
-#
-# Was der Container sieht: {PROJEKTPFAD} unter /project, sonst nichts vom
-# Host. Kein Home, kein ~/.claude, keine Nachbarprojekte. Nach draussen
-# kommt er nur ueber den Proxy und nur zu den Hosts in dessen Allowlist.
-
-services:
-  nightshift:
-    build:
-      context: .
-      target: runner
-    image: nightshift-runner
-    init: true
-    working_dir: /project
-    command: ["bash", "/project/nightshift-run.sh"]
-    volumes:
-      # Der einzige Pfad vom Host. Schreibbar, weil Claude hier arbeitet.
-      - "{PROJEKTPFAD}:/project"
-      # Eigenes Home im Volume, damit ~/.claude des Hosts aussen bleibt.
-      - "nightshift-home:/home/node"
-    environment:
-      # Ohne Schluessel bricht der Runner mit einer Meldung ab. Der
-      # Schluessel wird nicht ins Image gebacken, er kommt aus der Umgebung
-      # oder aus einer .env neben dieser Datei.
-      ANTHROPIC_API_KEY: "${{ANTHROPIC_API_KEY:-}}"
-      HTTPS_PROXY: "http://egress:8888"
-      HTTP_PROXY: "http://egress:8888"
-      NO_PROXY: "localhost,127.0.0.1"
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-      NIGHTSHIFT_BUDGET_USD: "${{NIGHTSHIFT_BUDGET_USD:-{BUDGET_USD}}}"
-    depends_on:
-      - egress
-    networks:
-      - nightshift-intern
-    # Alles ausser /project, /home/node und /tmp ist unveraenderlich.
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - "no-new-privileges:true"
-    pids_limit: 512
-    mem_limit: 4g
-
-  egress:
-    build:
-      context: .
-      target: egress
-    image: nightshift-egress
-    init: true
-    networks:
-      # Haengt in beiden Netzen und ist damit die einzige Bruecke nach
-      # draussen. Was nicht in der Allowlist steht, beantwortet der Proxy
-      # mit 403.
-      - nightshift-intern
-      - nightshift-extern
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - "no-new-privileges:true"
-    mem_limit: 256m
-
-networks:
-  nightshift-intern:
-    # Kein Weg nach draussen. Der Runner haengt nur hier.
-    internal: true
-  nightshift-extern: {{}}
-
-volumes:
-  nightshift-home: {{}}
-"""
-
-
-DOCKER_SH = """#!/bin/bash
-# Baut den Container und laesst den Nightshift darin laufen.
-set -uo pipefail
-
-cd "$(dirname "$0")"
-
-if docker compose version >/dev/null 2>&1; then
-    COMPOSE=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE=(docker-compose)
-else
-    echo "Weder 'docker compose' noch 'docker-compose' gefunden."
-    echo "   Docker Compose ist der Standardweg fuer den isolierten Lauf."
-    echo "   Ohne Docker: siehe README-nightshift.md, Abschnitt Isolation."
-    exit 1
-fi
-
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ ! -f .env ]; then
-    echo "ANTHROPIC_API_KEY ist nicht gesetzt und es gibt keine .env."
-    echo "   export ANTHROPIC_API_KEY=sk-ant-...   oder   echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env"
-    exit 1
-fi
-
-echo "Baue Container..."
-"${COMPOSE[@]}" build || exit 1
-
-echo "Starte Nightshift im Container..."
-"${COMPOSE[@]}" up \\
-    --abort-on-container-exit \\
-    --exit-code-from nightshift
-RC=$?
-
-"${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1
-
-echo ""
-echo "Container beendet, Exit-Code $RC"
-echo "Ergebnis: nightshift-receipts/ im Projekt"
-exit $RC
-"""
+DOCKERFILE = gemeinsam.dockerfile(_CONTAINER)
+DOCKER_COMPOSE = gemeinsam.compose(_CONTAINER)
+DOCKER_SH = gemeinsam.docker_sh(_CONTAINER, gemeinsam.DOCKER_SH_LAUF)
 
 
 # ── Cost Governor: erst messen, dann stoppen ────────────────
@@ -1474,9 +1246,9 @@ The root comes from `NIGHTSHIFT_PROJEKT` at run time and defaults to `{PROJEKTPF
 - **Writes through Bash.** `echo > file`, `tee`, `cp`, `mv`, `>>` are Bash
   calls. They reach the first hook, and that one checks no paths.
 - **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
-  readable stays readable, inside the project and outside it.
-- **Symlinks.** The comparison is textual. A link inside the project pointing
-  outside is not followed and passes.
+  readable stays readable.
+- **Symlinks.** The comparison is textual. A link inside the directory that
+  points outside is not followed and passes.
 - **Two names for one directory.** To a text comparison `/tmp` and
   `/private/tmp` are two places; on macOS they are one.
 - **Tools from MCP servers.** They carry their own names, and no matcher here

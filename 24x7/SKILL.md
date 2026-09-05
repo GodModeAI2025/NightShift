@@ -1,7 +1,7 @@
 ---
 name: 24x7
 license: Apache-2.0
-compatibility: "Requires Claude Code CLI (claude -p), bash, python3 >= 3.9, jq. macOS recommended for sandbox-exec. timeout or gtimeout required."
+compatibility: "Requires Claude Code CLI (claude -p), bash, python3 >= 3.9, jq. Docker Compose for the default isolated run; the image brings timeout with it. Without a container: macOS with sandbox-exec, plus timeout or gtimeout on PATH."
 description: "Generates an endless Claude Code runner with inbox/outbox folder architecture as ZIP. Claude processes tasks from an inbox folder, delivers results to an outbox folder, and runs idle tasks when the queue is empty. Use this skill whenever someone wants a permanent Claude agent, a task queue, a job runner, or a drop-folder workflow. Trigger phrases: endloser Runner, 24/7 Claude, Daemon, Always-On, Job-Queue, Inbox Outbox, Drop-Folder, Hot-Folder, Task-Warteschlange, Claude als Service, dauerhaft laufen lassen."
 ---
 
@@ -38,6 +38,9 @@ workspace/
 │   └── idle-tasks.md
 ├── runner.sh        ← The endless loop
 ├── watchdog.sh      ← Heartbeat monitor
+├── 24x7-docker.sh   ← Builds the container and starts the runner in it
+├── Dockerfile       ← runner + egress proxy
+├── docker-compose.yml ← Workspace at /workspace, internal network
 └── .claude/settings.json  ← Security hooks
 ```
 
@@ -116,7 +119,10 @@ python3 ~/build_24x7.py
 |------|---------|
 | runner.sh | Endless loop: poll inbox, spawn Claude, route results. PID lock + graceful shutdown. |
 | runner-bg.sh | Background starter (nohup wrapper) |
-| watchdog.sh | Heartbeat monitor with live status: 📥inbox 🔄working ✅done ❌failed |
+| 24x7-docker.sh | Builds the container and starts the runner in it. `--logs` follows the log. |
+| Dockerfile | Two targets: runner (Claude Code) and egress (allowlist proxy) |
+| docker-compose.yml | Workspace at /workspace, internal network, read-only root, all capabilities dropped |
+| watchdog.sh | Heartbeat monitor with live status: 📥inbox 🔄working ✅done ❌failed. Only for a run on the host: in the container the heartbeat lands in its own tmpfs. |
 | sandbox.sb | macOS sandbox profile: restricts writes to workspace + /tmp. Reads outside the workspace and outbound traffic on 443 stay open. |
 | .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat) |
 | CLAUDE.md | Workspace rules: isolation, autonomy zones, error tolerance, workspace memory |
@@ -147,7 +153,9 @@ Format: date, task name, decision, reasoning. Append-only.
 - PreToolUse hook blocks a fixed list of command patterns: rm against dangerous targets (root, home and its direct children, globs, parent paths, .git, system directories), mkfs, dd writing to a device, sudo, chmod 777, curl piped into bash, eval. Fork bombs are not on that list, there is no pattern for them.
 - Two PreToolUse entries, one implementation for both skills in `gemeinsam.py`. `"matcher": "Bash"` greps the command text; `"matcher": "Write|Edit|MultiEdit|NotebookEdit"` resolves the target path and blocks every write outside the workspace (`CLAUDE_24X7_WORKSPACE`), plus `.claude/settings.json` inside it. Without jq both block instead of waving the call through.
 - What the path barrier does not see: a write performed by a Bash command (`echo >`, `tee`, `cp`, `mv`), any read, a symlink inside the workspace pointing outside, and tools contributed by MCP servers. It is a barrier for the four write tools, not a boundary for the run. See [SECURITY.md](../SECURITY.md).
-- Sandbox profile restricts writes to workspace + /tmp at kernel level. Reads outside the workspace and outbound network traffic are not restricted.
+- The container is the default fence: only the workspace is mounted, the home directory lives in a volume, and the sole route outward is a proxy that allows api.anthropic.com and answers everything else with 403. The image also brings `timeout`, which the task cap needs and a stock macOS does not have.
+- The runner measures which of the two it sits behind and aborts with exit code 3 when it finds neither. It is a probe, not a declaration: container markers for the first, an unreadable `/Users` for the second. `CLAUDE_24X7_SANDBOXED` is a cross-check only and unlocks nothing. `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` is the documented way out; tell the user what it costs.
+- Sandbox profile restricts writes to workspace + /tmp at kernel level. Reads outside the workspace and outbound network traffic are not restricted. It is the macOS option, not the default.
 - PID lock prevents duplicate runner instances
 - Task timeout prevents infinite loops
 - **Cost warning:** 24/7 operation generates continuous API calls. Set idle to "sleep" if cost is a concern. Monitor the Anthropic dashboard.

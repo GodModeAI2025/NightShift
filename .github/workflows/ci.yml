@@ -36,11 +36,11 @@ jobs:
       - name: Pfadschranke des PreToolUse-Hooks pruefen
         run: python -m unittest discover -s tests -p 'test_pfad_schranke.py' -v
 
-      # Prueft das erzeugte Dockerfile und die Compose-Datei und laesst den
-      # Runner ohne Isolation gegen einen Stub laufen: er muss abbrechen.
-      # Der Lauf im Container selbst passiert hier nicht, der braucht
-      # Bauzeit und ein Netz.
-      - name: Isolation des erzeugten Setups pruefen
+      # Prueft die erzeugten Dockerfiles und Compose-Dateien beider Skills
+      # und laesst beide Runner ohne Isolation gegen einen Stub laufen: sie
+      # muessen abbrechen. Der Lauf im Container selbst passiert hier nicht,
+      # der braucht Bauzeit und ein Netz.
+      - name: Isolation beider Setups pruefen
         run: python -m unittest discover -s tests -p 'test_isolation.py' -v
 
       # Kostenzaehler und Receipt laufen gegen einen claude-Stub, es

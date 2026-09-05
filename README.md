@@ -53,7 +53,7 @@ Nightshift generates a `Dockerfile` and a `docker-compose.yml`. The container mo
 
 The `sandbox-exec` profile stays as the macOS option. It restricts writes at the kernel level: Claude can only write to the project directory and `/tmp`, and `rm -rf ~/` fails without the hook having to catch it. What it does not restrict is reads outside the project and outbound traffic. Apple has deprecated `sandbox-exec`; it still works on current macOS versions. See [What the Sandbox Does Not Cover](#what-the-sandbox-does-not-cover) and [SECURITY.md](SECURITY.md).
 
-24x7 has neither of the two yet. Its runner still starts without any isolation check and its setup contains no container files.
+24x7 gets the same two. `runner.sh` measures the same way, refuses to start unfenced with exit code 3, and `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` is the way past it. Its container mounts the workspace as `/workspace` and starts the daemon in it; `./24x7-docker.sh` builds and runs it, tasks keep arriving in `inbox/` on the host. Dockerfile, Compose file, docker script, seatbelt profile and the isolation check are one implementation in `gemeinsam.py`, filled with different names.
 
 **Layer 3b: Cost Governor (Nightshift)**
 `nightshift-cost.sh` reads Claude's `stream-json` output, adds up the `usage` fields per model and estimates the dollar figure from a dated price table. When the estimate passes the budget, it terminates Claude's whole process group — a grandchild that outlived the parent used to keep the pipe open and the run hanging — and the run ends with exit code 9. Without `jq`, and equally when the stream carries no `usage` events at all, it measures nothing, says `unbekannt` and lets the run continue — a broken counter must not kill a working night, and it must not report a zero it never measured.
@@ -475,7 +475,7 @@ NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh    # additional token ceili
 
 Isolation is not the same as the hook. The `Bash` hook greps command text, so it catches typos and obvious mistakes; the path guard measures a target path and holds against `Write`, `Edit` and `NotebookEdit`. Neither of them stops a read, and neither of them stops a write that a Bash command performs.
 
-24x7 does not have this check. Its runner starts under any conditions.
+24x7 runs the same check, with `CLAUDE_24X7_SANDBOXED` as the cross-check and `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` as the opt-out. What it does not have is a budget and a receipt; those are still Nightshift only.
 
 ### The Path Guard
 
@@ -523,7 +523,7 @@ Blocking its own configuration is deliberate. A run that may rewrite
   `.claude/settings.json` is in the project. The install step is a separate
   command precisely because `cp -r dir/* .` skips dotfiles.
 
-Measured in CI: 13 write targets that must be blocked and 9 that must pass,
+Measured in CI: 14 write targets that must be blocked and 9 that must pass,
 per skill, driven as real tool calls through the hook command taken out of the
 generated `settings.json`. Plus `Edit`, `MultiEdit` and `NotebookEdit` on both
 sides of the boundary, an input without a path, and a run with `jq` removed
@@ -639,7 +639,10 @@ kill $(cat /tmp/24x7.pid)
 |------|---------|
 | `runner.sh` | Endless loop: poll inbox → spawn Claude → route results |
 | `runner-bg.sh` | Background wrapper using `nohup` |
-| `watchdog.sh` | Heartbeat monitor with live inbox/outbox counters |
+| `24x7-docker.sh` | Builds the container and starts the runner in it |
+| `Dockerfile` | Two targets: runner and egress proxy |
+| `docker-compose.yml` | Workspace at `/workspace`, internal network, hardening |
+| `watchdog.sh` | Heartbeat monitor with live inbox/outbox counters. Host runs only, the container has its own `/tmp` |
 | `sandbox.sb` | macOS sandbox profile |
 | `.claude/settings.json` | PreToolUse + PostToolUse hooks |
 | `CLAUDE.md` | Workspace rules: autonomy zones, error tolerance, workspace memory (decisions.md) |
@@ -654,7 +657,7 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Next**
 
-- **The same three things for 24x7.** Container, budget and receipt exist for Nightshift only. The 24x7 runner still starts without an isolation check, measures nothing and leaves a `log.md` per task instead of a report.
+- **Budget and receipt for 24x7.** The container is there now, the other two are not. The runner measures nothing and leaves a `log.md` per task instead of a report. A budget for a task loop is not the Nightshift counter with a new name: it has to carry a total across tasks, and the counter starts from zero per invocation.
 - **Egress control for the seatbelt path.** The container has an allowlist proxy; the seatbelt profile still allows outbound 443 to any host.
 
 **After that**
@@ -671,7 +674,7 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Test coverage**
 
-CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, drives the path guard against a table of write targets inside and outside the project, unpacks the release artifact and runs the generator from that location, validates the generated `docker-compose.yml`, runs `nightshift-run.sh` against a Claude stub for the isolation check, the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, drives the path guard against a table of write targets inside and outside the project, unpacks the release artifact and runs the generator from that location, validates the generated `docker-compose.yml` of both skills, runs `nightshift-run.sh` and `runner.sh` against a Claude stub for the isolation check, `nightshift-run.sh` for the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
 ## Related Projects
 

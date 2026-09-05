@@ -158,4 +158,4 @@ Format: date, task name, decision, reasoning. Append-only.
 - Sandbox profile restricts writes to workspace + /tmp at kernel level. Reads outside the workspace and outbound network traffic are not restricted. It is the macOS option, not the default.
 - PID lock prevents duplicate runner instances
 - Task timeout prevents infinite loops
-- **Cost warning:** 24/7 operation generates continuous API calls. Set idle to "sleep" if cost is a concern. Monitor the Anthropic dashboard.
+- **Cost:** 24/7 operation generates continuous API calls, idle included: with any idle behaviour but `sleep`, Claude works for up to the idle timeout and then pauses only for the poll interval. `CLAUDE_24X7_BUDGET_USD` (default 50.00) and `CLAUDE_24X7_BUDGET_TOKENS` bound the whole run; at the limit the running task goes to `failed/` and the daemon exits 9. The running total is `24x7-kosten.json` in the workspace root, each task gets a `receipt.md` next to its output. The figure is an estimate from a dated price table, so keep watching the Anthropic dashboard.

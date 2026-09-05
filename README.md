@@ -475,7 +475,7 @@ NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh    # additional token ceili
 
 Isolation is not the same as the hook. The `Bash` hook greps command text, so it catches typos and obvious mistakes; the path guard measures a target path and holds against `Write`, `Edit` and `NotebookEdit`. Neither of them stops a read, and neither of them stops a write that a Bash command performs.
 
-24x7 runs the same check, with `CLAUDE_24X7_SANDBOXED` as the cross-check and `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` as the opt-out. What it does not have is a budget and a receipt; those are still Nightshift only.
+24x7 runs the same check, with `CLAUDE_24X7_SANDBOXED` as the cross-check and `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` as the opt-out. Since this release it also has a budget and a receipt, under `CLAUDE_24X7_BUDGET_USD` and `CLAUDE_24X7_BUDGET_TOKENS`. The budget covers the whole daemon run, not a single task, and the idle branch counts against it too, because idle calls Claude rather than sleeping.
 
 ### The Path Guard
 

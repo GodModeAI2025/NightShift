@@ -342,7 +342,11 @@ mv failed/my-task inbox/my-task
 ## Lesson 8: What to Watch Out For
 
 ### API Costs — The Biggest Risk
-24x7 generates **continuous** API calls. Even idle tasks (cleanup, docs, tests) cost money. A runner processing 10 tasks per day might cost $20–100/day. Set idle to `sleep` to stop costs when the inbox is empty. Monitor at console.anthropic.com.
+24x7 generates **continuous** API calls. Idle costs money too, and more than it sounds: with any idle behaviour but `sleep`, Claude works up to the idle timeout and then pauses only for the poll interval. A runner processing 10 tasks per day might cost $20–100/day.
+
+There is a ceiling now. `CLAUDE_24X7_BUDGET_USD` (default 50.00) and `CLAUDE_24X7_BUDGET_TOKENS` bound the **whole run**, not a single task, and idle counts against them. At the limit the running task moves to `failed/` with the reason and the runner exits 9. The running total sits in `24x7-kosten.json` at the workspace root, and each task gets a `receipt.md` beside its output.
+
+The figure is an estimate from a dated price table. Without `jq` the counter measures nothing and lets the run continue rather than ending it. console.anthropic.com stays the authority.
 
 ### Sandbox Is Not Default
 Activate explicitly: `sandbox-exec -f sandbox.sb ./runner.sh`. Without it, Claude has full access to your user account. On Linux, use Docker.

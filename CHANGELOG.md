@@ -12,11 +12,31 @@ cut by tagging `v` plus the content of `VERSION`.
 
 ## [Unreleased]
 
-Cost governor and receipt are still Nightshift only; 24x7 keeps the state of
-1.0.0 there. Container isolation and the path barrier of the PreToolUse hook
-are in both.
+Container isolation, the path barrier of the PreToolUse hook, the watchdog
+reaction, the cost governor and the receipt are now in both skills. What is
+still Nightshift only is the runbook workflow itself.
 
 ### Added
+
+- **A cost governor and a receipt for 24x7.** The daemon used to run without a
+  limit. Its idle branch calls Claude rather than sleeping: with the default
+  `IDLE_BEHAVIOR=cleanup` it works for up to 15 minutes and then pauses for 30
+  seconds, so an empty inbox cost nearly as much as a full one and nothing said
+  so. `CLAUDE_24X7_BUDGET_USD` (default 50.00) and `CLAUDE_24X7_BUDGET_TOKENS`
+  now bound the whole run, idle calls included. On reaching the limit the
+  running task moves to `failed/` with the reason, the daemon ends with exit
+  code 9, and `24x7-kosten.json` in the workspace root carries the running
+  total from the first second.
+
+  The counter is the one Nightshift already used; only the way it spans several
+  calls is new. It sees a single stream, so it is handed the *remaining* budget
+  before each call rather than the total. That makes the same arithmetic hold
+  across a whole daemon run without a second implementation of it. A restart
+  starts counting again, the watchdog's `neustart` included.
+
+  Both scripts, and the price table behind them, now live once in
+  `gemeinsam.py`. The generated Nightshift files are byte-identical to what
+  `main` shipped before the move; that was the acceptance test for it.
 
 - A second `PreToolUse` entry in both generated setups:
   `"matcher": "Write|Edit|MultiEdit|NotebookEdit"`. It resolves the target path
@@ -148,6 +168,13 @@ are in both.
   permission scoping, not isolation.
 
 ### Fixed
+
+- **The 24x7 runner reported every ending as a clean one.** Its `cleanup`
+  finished with a hardcoded `exit 0`, so the isolation abort (exit 3) only
+  worked because the check sat before the trap was installed. A budget stop
+  happens inside the loop and would have been swallowed the same way: the
+  watchdog and the operator would both have seen a normal end. `cleanup` now
+  takes the code as Nightshift's does and passes it on.
 
 - **The watchdog looked for the run in a place the runner never wrote to.**
   The new stall reaction reads the PID file from `NIGHTSHIFT_PIDDATEI` or

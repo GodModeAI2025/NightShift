@@ -42,6 +42,8 @@ VIERUNDZWANZIG_DATEIEN = {
     "24x7-setup/inbox/beispiel-task/materials/.gitkeep",
     "24x7-setup/inbox/beispiel-task/task.md",
     "24x7-setup/outbox/.gitkeep",
+    "24x7-setup/24x7-cost.sh",
+    "24x7-setup/24x7-receipt.sh",
     "24x7-setup/runner-bg.sh",
     "24x7-setup/runner.sh",
     "24x7-setup/sandbox.sb",

@@ -54,6 +54,9 @@ jobs:
       - name: Kostenbudget und Morning Receipt pruefen
         run: python -m unittest discover -s tests -p 'test_kosten_receipt.py' -v
 
+      - name: Kostenbudget von 24x7 pruefen
+        run: python -m unittest discover -s tests -p 'test_kosten_24x7.py' -v
+
       # Baut dieselben Artefakte, die der Release-Workflow an ein Tag haengt,
       # und schaut hinein. Ein kaputtes Paket faellt so vor dem Tag auf.
       - name: Release-Artefakte bauen und Inhalt pruefen

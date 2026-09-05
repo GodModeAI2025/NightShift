@@ -31,8 +31,11 @@ NIGHTSHIFT_DATEIEN = {
 
 VIERUNDZWANZIG_DATEIEN = {
     "24x7-setup/.claude/settings.json",
+    "24x7-setup/24x7-docker.sh",
     "24x7-setup/CLAUDE.md",
+    "24x7-setup/Dockerfile",
     "24x7-setup/README.md",
+    "24x7-setup/docker-compose.yml",
     "24x7-setup/failed/.gitkeep",
     "24x7-setup/idle/idle-tasks.md",
     "24x7-setup/inbox/.gitkeep",

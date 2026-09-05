@@ -1012,8 +1012,8 @@
     <div class="security-layers">
       <div class="security-layer">
         <div class="num">1</div>
-        <h4>PreToolUse Hook</h4>
-        <p>Blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval. No pattern for fork bombs.</p>
+        <h4>PreToolUse Hooks</h4>
+        <p>Two barriers. One reads the command text and blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval. No pattern for fork bombs. The other reads the target path of Write, Edit and NotebookEdit and blocks every write outside the project.</p>
       </div>
       <div class="security-layer">
         <div class="num">2</div>
@@ -1028,7 +1028,7 @@
       <div class="security-layer">
         <div class="num">4</div>
         <h4>Watchdog</h4>
-        <p>Heartbeat monitor detects when Claude stalls. macOS notification or custom alerting.</p>
+        <p>Heartbeat monitor detects when Claude stalls, and can terminate or restart the run instead of only reporting it.</p>
       </div>
     </div>
   </div>
@@ -1052,15 +1052,16 @@
     <div class="layer-detail">
       <h4><span class="badge">Layer 2</span> Hooks — Automated Guardrails</h4>
       <p>Claude Code hooks are scripts that fire on specific events. They run even with <code>--dangerously-skip-permissions</code>. A PreToolUse hook returning exit code 2 blocks the tool call unconditionally — Claude cannot override it.</p>
-      <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Blocks rm against dangerous targets, sudo, mkfs, dd, chmod 777, curl|bash, eval
+      <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Bash: blocks rm against dangerous targets, sudo, mkfs, dd, chmod 777, curl|bash, eval
+<span style="color:var(--accent-amber)">PreToolUse</span>    → Write/Edit/NotebookEdit: blocks every write target outside the project
 <span style="color:var(--accent-green)">PostToolUse</span>   → Writes heartbeat timestamp after every tool call
 <span style="color:var(--accent-night-glow)">SessionStart</span>  → After /compact: "Re-read runbook.md, continue at next open item"
 <span style="color:var(--accent-24x7-glow)">Stop</span>          → Every 5 steps: repeat constraints. 3× no progress: STALL WARNING</div>
     </div>
 
     <div class="layer-detail">
-      <h4><span class="badge">Layer 3</span> Isolation — Container by Default (Nightshift)</h4>
-      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. It measures the state rather than asking for it: the container by <code>/.dockerenv</code>, <code>/run/.containerenv</code>, <code>/proc/1/cgroup</code> or an overlay root, the profile by a probe that fails under it — the runner can list the project but not <code>/Users</code>. 24x7 does not have this yet.</p>
+      <h4><span class="badge">Layer 3</span> Isolation — Container by Default</h4>
+      <p>Nightshift generates a <code>Dockerfile</code> and a <code>docker-compose.yml</code>. The container mounts the project as <code>/project</code> and nothing else from the host: no home directory, no <code>~/.claude</code>, no neighbouring projects. Outbound traffic runs through a proxy that allows <code>api.anthropic.com</code> and answers everything else with 403. <code>nightshift-run.sh</code> refuses to start when it finds neither container nor sandbox profile and ends with exit code 3; <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code> is the deliberate way out. It measures the state rather than asking for it: the container by <code>/.dockerenv</code>, <code>/run/.containerenv</code>, <code>/proc/1/cgroup</code> or an overlay root, the profile by a probe that fails under it, since the runner can list the project but not <code>/Users</code>. 24x7 has the same container and the same check, with <code>./24x7-docker.sh</code>, the workspace at <code>/workspace</code> and <code>CLAUDE_24X7_ALLOW_UNSANDBOXED=1</code> as the opt-out.</p>
       <p style="margin-top: 12px;">The <code>sandbox-exec</code> profile remains the macOS option. It restricts Claude's filesystem writes at the kernel level: Claude can only write to the project directory and /tmp, and <code>rm -rf ~/</code> fails without the hook having to catch it.</p>
       <p style="margin-top: 12px;">What the profile does not restrict: reads outside the home directory, and network traffic. It denies <code>/Users</code> and <code>/home</code> but re-grants <code>$HOME/.claude</code> and <code>$HOME/.config</code>, and it allows outbound TCP on port 443 to any host. Your other projects' transcripts sit in the first directory, CLI tokens commonly in the second. Anything the run can read, it can also send. Call it a write boundary, not a security boundary. The <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a> has the threat model.</p>
       <p style="margin-top: 12px;">The open read access is a concession. A profile listing only the few paths this one used to allow no longer starts any program on current macOS: measured on Darwin 27, <code>sandbox-exec -f nightshift-sandbox.sb /bin/echo hi</code> ends with SIGABRT, because the dyld cache lives outside that list. A profile under which nothing runs protects nobody.</p>
@@ -1068,8 +1069,8 @@
     </div>
 
     <div class="layer-detail">
-      <h4><span class="badge">Layer 4</span> Watchdog — Liveness Monitoring</h4>
-      <p>A separate script that checks the heartbeat log. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm. On macOS, this is a system notification. You can extend it with your own alerting (Slack webhook, email, etc.).</p>
+      <h4><span class="badge">Layer 4</span> Watchdog — Liveness Monitoring and Restart</h4>
+      <p>A separate script that checks the heartbeat log. If Claude hasn't written a heartbeat in N minutes (default: 10), it acts. Three actions: <code>melden</code> reports and is the default, <code>beenden</code> sends TERM to the run and KILL after a grace period, <code>neustart</code> does that and starts the run again, up to a restart budget. A run that ended on its own is never restarted: the watchdog only restarts what it just terminated itself, and a budget stop looks exactly like a run that ended. What stays uncovered is a busy loop, because a Claude retrying the same failing test keeps writing heartbeats, and a run inside the container, whose heartbeat lands in its own tmpfs.</p>
     </div>
 
     <div class="layer-detail" style="border-color: var(--accent-amber);">
@@ -1157,7 +1158,7 @@
         <div class="step-num">1</div>
         <div class="step-content">
           <h4>Install and Generate</h4>
-          <p>Install the skill from the latest release: <code>unzip 24x7.skill -d ~/.claude/skills/</code>. Then tell Claude: "Set up a 24x7 runner at /my/workspace with idle behavior cleanup". Claude generates the workspace structure with runner, watchdog, hooks, and sandbox.</p>
+          <p>Install the skill from the latest release: <code>unzip 24x7.skill -d ~/.claude/skills/</code>. Then tell Claude: "Set up a 24x7 runner at /my/workspace with idle behavior cleanup". Claude generates the workspace structure with runner, watchdog, hooks, container files, and sandbox profile.</p>
         </div>
       </div>
       <div class="step">
@@ -1206,7 +1207,7 @@
 
     <div class="warning">
       <h4>The Sandbox Is Not Active by Default</h4>
-      <p>The generated sandbox profile is just a file. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to your entire user account. The PreToolUse hook matches command text and only sees Bash, so Write and Edit pass it untouched. With the profile active, writes outside the project are blocked; reads and outbound traffic are not. Details in the <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a>. On Linux there is no sandbox-exec, see the note below.</p>
+      <p>The generated sandbox profile is just a file. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to your entire user account. The PreToolUse hooks catch two things: a dangerous command text, and a write target outside the project. What passes either way is a write that a Bash command performs, and every read. With the profile active, writes outside the project are blocked; reads and outbound traffic are not. Details in the <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a>. On Linux there is no sandbox-exec, see the note below.</p>
     </div>
 
     <div class="warning">
@@ -1221,7 +1222,7 @@
 
     <div class="warning">
       <h4>Docker Is the Route on Both Systems</h4>
-      <p><code>sandbox-exec</code> is macOS-only and deprecated by Apple, which is why Nightshift no longer builds on it. <code>./nightshift-docker.sh</code> runs the same way on Linux and macOS and is the sharper boundary, because reads and outbound traffic are fenced as well. A dedicated user account remains the weaker fallback without Docker, and it needs <code>NIGHTSHIFT_PROJEKT</code> so the run works in the copy rather than in the original directory, plus <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code>, because permission scoping is not isolation. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec-and-does-not-need-it">README</a> has the steps. 24x7 still has no isolation check and no container files.</p>
+      <p><code>sandbox-exec</code> is macOS-only and deprecated by Apple, which is why Nightshift no longer builds on it. <code>./nightshift-docker.sh</code> runs the same way on Linux and macOS and is the sharper boundary, because reads and outbound traffic are fenced as well. A dedicated user account remains the weaker fallback without Docker, and it needs <code>NIGHTSHIFT_PROJEKT</code> so the run works in the copy rather than in the original directory, plus <code>NIGHTSHIFT_ALLOW_UNSANDBOXED=1</code>, because permission scoping is not isolation. The <a href="https://github.com/GodModeAI2025/NightShift#linux-has-no-sandbox-exec-and-does-not-need-it">README</a> has the steps. 24x7 works the same way, with <code>./24x7-docker.sh</code>.</p>
     </div>
 
     <div class="warning">

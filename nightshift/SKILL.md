@@ -152,7 +152,7 @@ The ZIP contains:
 | docker-compose.yml | Project as the only host mount, internal network, read-only root, dropped capabilities |
 | nightshift-cost.sh | Counts tokens from the stream-json output, estimates the cost, stops the run at the budget |
 | nightshift-receipt.sh | Writes receipt.json and receipt.md per run, also after a crash |
-| nightshift-watchdog.sh | Heartbeat monitor with macOS notification support |
+| nightshift-watchdog.sh | Heartbeat monitor. NIGHTSHIFT_WATCHDOG_AKTION picks the reaction: melden (default), beenden, neustart. |
 | nightshift-sandbox.sb | macOS sandbox profile: restricts writes to project + /tmp. Reads outside the project and outbound traffic on 443 stay open. |
 | CLAUDE-nightshift.md | Append to CLAUDE.md for project conventions + run memory |
 | README-nightshift.md | Full installation and usage guide |
@@ -181,7 +181,8 @@ The Stop hook tracks progress between checks. If the number of completed runbook
 ## Security
 
 - PreToolUse hook blocks a fixed list of command patterns: rm against dangerous targets (root, home and its direct children, globs, parent paths, .git, system directories), mkfs, dd writing to a device, sudo, chmod 777, curl piped into bash, eval. Fork bombs are not on that list, there is no pattern for them.
-- The hook carries `"matcher": "Bash"` and greps the command text, so Write and Edit never reach it. It is a typo catcher, not a boundary. See [SECURITY.md](../SECURITY.md).
+- Two PreToolUse entries, one implementation for both skills in `gemeinsam.py`. `"matcher": "Bash"` greps the command text; `"matcher": "Write|Edit|MultiEdit|NotebookEdit"` resolves the target path and blocks every write outside the project directory (`NIGHTSHIFT_PROJEKT`, `/project` in the container), plus `.claude/settings.json` inside it. Without jq both block instead of waving the call through.
+- What the path barrier does not see: a write performed by a Bash command (`echo >`, `tee`, `cp`, `mv`), any read, a symlink inside the project pointing outside, and tools contributed by MCP servers. It is a barrier for the four write tools, not a boundary for the run. See [SECURITY.md](../SECURITY.md).
 - The container is the default fence: only the project is mounted, the home directory lives in a volume, and the sole route outward is a proxy that allows api.anthropic.com and answers everything else with 403.
 - Sandbox profile restricts writes to project directory + /tmp at kernel level. Reads outside the project and outbound network traffic are not restricted. It is the macOS option, not the default.
 - The runner measures which of the two it sits behind and aborts with exit code 3 when it finds neither. It is a probe, not a declaration: container markers for the first, an unreadable `/Users` for the second. `NIGHTSHIFT_SANDBOXED` is a cross-check only and unlocks nothing; a value that contradicts the measurement ends the run with 3. `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` is the documented way out; tell the user what it costs, and note that the receipt then says `keine`.

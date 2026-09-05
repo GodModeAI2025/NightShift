@@ -88,6 +88,9 @@ class LaufTest(unittest.TestCase):
         umgebung["NS_TEST_CLAUDE_PID"] = os.path.join(arbeit, "claude.pid")
         umgebung["NS_TEST_ENKEL_PID"] = os.path.join(arbeit, "enkel.pid")
         umgebung["NIGHTSHIFT_PROJEKT"] = arbeit
+        # Siehe test_isolation: eine geteilte Sperrdatei laesst gleichzeitige
+        # Laeufe einander blockieren.
+        umgebung["NIGHTSHIFT_PIDDATEI"] = os.path.join(arbeit, "lauf.pid")
         # Kein NIGHTSHIFT_SANDBOXED mehr: die Variable schaltet keine
         # Isolation frei. Die Tests nehmen den dokumentierten Verzicht.
         umgebung.pop("NIGHTSHIFT_SANDBOXED", None)

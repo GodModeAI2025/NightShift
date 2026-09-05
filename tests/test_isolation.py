@@ -1,9 +1,13 @@
-"""Prueft die Container-Isolation, die der Nightshift-Generator erzeugt.
+"""Prueft die Container-Isolation, die beide Generatoren erzeugen.
 
 Zwei Ebenen. Statisch: enthaelt das Setup Dockerfile und docker-compose.yml,
 mountet die Compose-Datei genau einen Hostpfad, und weigert sich der Runner
 ohne Isolation zu starten. Dynamisch: laesst 'docker compose config' die
 erzeugte Datei pruefen, sobald ein Compose-Kommando erreichbar ist.
+
+Seit Welle 7 gilt beides fuer beide Skills. Die Vorlagen stehen einmal in
+gemeinsam.py, die Tabelle SKILLS unten haelt fest, welche Namen jeder Skill
+einsetzt, und die strukturellen Tests laufen ueber beide.
 
 Der Lauf im Container selbst gehoert nicht hierher: er braucht ein Netz, ein
 Basis-Image und mehrere Minuten Bauzeit. Der Nachweis dafuer steht im
@@ -15,11 +19,40 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import helfer
 
 PRAEFIX = "nightshift-setup/"
+
+# Was jeder Skill in dieselben Vorlagen einsetzt.
+SKILLS = {
+    "nightshift": {
+        "praefix": "nightshift-setup/",
+        "dienst": "nightshift",
+        "mount": "/project",
+        "dockerskript": "nightshift-docker.sh",
+        "startskript": "nightshift-run.sh",
+        "profil": "nightshift-sandbox.sb",
+        "sandboxvar": "NIGHTSHIFT_SANDBOXED",
+        "pfadvar": "NIGHTSHIFT_PROJEKT",
+        "pfad_env": "NIGHTSHIFT_PROJECT",
+        "readme": "README-nightshift.md",
+    },
+    "24x7": {
+        "praefix": "24x7-setup/",
+        "dienst": "24x7",
+        "mount": "/workspace",
+        "dockerskript": "24x7-docker.sh",
+        "startskript": "runner.sh",
+        "profil": "sandbox.sb",
+        "sandboxvar": "CLAUDE_24X7_SANDBOXED",
+        "pfadvar": "CLAUDE_24X7_WORKSPACE",
+        "pfad_env": "CLAUDE_24X7_WORKSPACE",
+        "readme": "README.md",
+    },
+}
 
 
 def compose_kommando():
@@ -78,8 +111,15 @@ class IsolationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.ordner = tempfile.mkdtemp(prefix="nightshift-isolation-")
-        cls.zip_pfad = helfer.baue_zip("nightshift", cls.ordner)
+        cls.zips = {
+            name: helfer.baue_zip(name, cls.ordner) for name in SKILLS
+        }
+        cls.zip_pfad = cls.zips["nightshift"]
         cls.projekt = helfer.GENERATOREN["nightshift"]["env"]["NIGHTSHIFT_PROJECT"]
+        cls.wurzeln = {
+            name: helfer.GENERATOREN[name]["env"][konfig["pfad_env"]]
+            for name, konfig in SKILLS.items()
+        }
 
     @classmethod
     def tearDownClass(cls):
@@ -88,61 +128,91 @@ class IsolationTest(unittest.TestCase):
     def datei(self, name):
         return helfer.datei_aus_zip(self.zip_pfad, PRAEFIX + name)
 
+    def skilldatei(self, skill, name):
+        return helfer.datei_aus_zip(
+            self.zips[skill], SKILLS[skill]["praefix"] + name
+        )
+
     def test_setup_enthaelt_dockerfile_und_compose(self):
-        eintraege = helfer.zip_eintraege(self.zip_pfad)
-        self.assertIn(PRAEFIX + "Dockerfile", eintraege)
-        self.assertIn(PRAEFIX + "docker-compose.yml", eintraege)
-        self.assertIn(PRAEFIX + "nightshift-docker.sh", eintraege)
+        for skill, konfig in SKILLS.items():
+            eintraege = helfer.zip_eintraege(self.zips[skill])
+            praefix = konfig["praefix"]
+            for name in ("Dockerfile", "docker-compose.yml", konfig["dockerskript"]):
+                self.assertIn(praefix + name, eintraege, skill)
 
     def test_dockerfile_hat_beide_ziele_und_laeuft_nicht_als_root(self):
-        inhalt = self.datei("Dockerfile")
-        self.assertIn("AS runner", inhalt)
-        self.assertIn("AS egress", inhalt)
-        self.assertIn("USER node", inhalt)
-        self.assertIn("USER tinyproxy", inhalt)
-        # NIGHTSHIFT_SANDBOXED ist im Container nur noch die Gegenprobe:
-        # der Runner misst selbst und bricht ab, wenn die Variable etwas
-        # anderes behauptet. Das Projekt liegt im Container unter /project.
-        self.assertIn("NIGHTSHIFT_SANDBOXED=docker", inhalt)
-        self.assertIn("NIGHTSHIFT_PROJEKT=/project", inhalt)
+        for skill, konfig in SKILLS.items():
+            inhalt = self.skilldatei(skill, "Dockerfile")
+            self.assertIn("AS runner", inhalt, skill)
+            self.assertIn("AS egress", inhalt, skill)
+            self.assertIn("USER node", inhalt, skill)
+            self.assertIn("USER tinyproxy", inhalt, skill)
+            # Die Variable ist im Container nur noch die Gegenprobe: der
+            # Runner misst selbst und bricht ab, wenn sie etwas anderes
+            # behauptet. Der Pfad im Container ist ein anderer als auf dem
+            # Host, und die Pfadvariable haelt ihn beweglich.
+            self.assertIn("%s=docker" % konfig["sandboxvar"], inhalt, skill)
+            self.assertIn(
+                "%s=%s" % (konfig["pfadvar"], konfig["mount"]), inhalt, skill
+            )
 
-    def test_compose_mountet_nur_das_projekt_vom_host(self):
-        inhalt = self.datei("docker-compose.yml")
-        mounts = [
-            zeile.strip().strip('-').strip().strip('"')
-            for zeile in inhalt.splitlines()
-            if zeile.strip().startswith('- "') and ":/" in zeile
-        ]
-        self.assertIn("%s:/project" % self.projekt, mounts)
-        for mount in mounts:
-            quelle = mount.split(":")[0]
-            # Alles ausser dem Projekt muss ein benanntes Volume sein, also
-            # ohne Schraegstrich. Ein zweiter Hostpfad waere ein Loch.
-            if quelle != self.projekt:
-                self.assertNotIn("/", quelle, "zweiter Hostpfad im Mount: %s" % mount)
+    def test_compose_mountet_nur_den_einen_hostpfad(self):
+        for skill, konfig in SKILLS.items():
+            inhalt = self.skilldatei(skill, "docker-compose.yml")
+            wurzel = self.wurzeln[skill]
+            mounts = [
+                zeile.strip().strip('-').strip().strip('"')
+                for zeile in inhalt.splitlines()
+                if zeile.strip().startswith('- "') and ":/" in zeile
+            ]
+            self.assertIn("%s:%s" % (wurzel, konfig["mount"]), mounts, skill)
+            for mount in mounts:
+                quelle = mount.split(":")[0]
+                # Alles andere muss ein benanntes Volume sein, also ohne
+                # Schraegstrich. Ein zweiter Hostpfad waere ein Loch.
+                if quelle != wurzel:
+                    self.assertNotIn(
+                        "/", quelle, "%s: zweiter Hostpfad im Mount: %s" % (skill, mount)
+                    )
 
     def test_compose_haerten_und_netztrennung_stehen_drin(self):
-        inhalt = self.datei("docker-compose.yml")
-        for erwartet in (
-            "read_only: true",
-            "cap_drop",
-            "no-new-privileges:true",
-            "internal: true",
-            "HTTPS_PROXY",
-        ):
-            self.assertIn(erwartet, inhalt, erwartet)
-        # Der Runner haengt nur im internen Netz; nur der Proxy sieht beide.
-        runner, egress = inhalt.split("  egress:", 1)
-        self.assertNotIn("nightshift-extern", runner)
-        self.assertIn("nightshift-extern", egress)
+        for skill, konfig in SKILLS.items():
+            inhalt = self.skilldatei(skill, "docker-compose.yml")
+            for erwartet in (
+                "read_only: true",
+                "cap_drop",
+                "no-new-privileges:true",
+                "internal: true",
+                "HTTPS_PROXY",
+            ):
+                self.assertIn(erwartet, inhalt, "%s: %s" % (skill, erwartet))
+            # Der Runner haengt nur im internen Netz; nur der Proxy sieht beide.
+            aussennetz = konfig["dienst"] + "-extern"
+            runner, egress = inhalt.split("  egress:", 1)
+            self.assertNotIn(aussennetz, runner, skill)
+            self.assertIn(aussennetz, egress, skill)
+
+    def test_compose_startet_das_startskript_aus_dem_gemounteten_pfad(self):
+        # Der Runner liegt im Setup, das Setup liegt im gemounteten Ordner.
+        # Zeigt das Kommando woandershin, startet der Container nichts.
+        for skill, konfig in SKILLS.items():
+            inhalt = self.skilldatei(skill, "docker-compose.yml")
+            self.assertIn(
+                '["bash", "%s/%s"]' % (konfig["mount"], konfig["startskript"]),
+                inhalt,
+                skill,
+            )
 
     def test_seatbelt_bleibt_als_option_erhalten(self):
-        eintraege = helfer.zip_eintraege(self.zip_pfad)
-        self.assertIn(PRAEFIX + "nightshift-sandbox.sb", eintraege)
-        readme = self.datei("README-nightshift.md")
-        self.assertIn("sandbox-exec -f nightshift-sandbox.sb", readme)
-        # Die Variable darf nicht mehr als Weg in die Isolation dastehen.
-        self.assertNotIn("NIGHTSHIFT_SANDBOXED=seatbelt", readme)
+        for skill, konfig in SKILLS.items():
+            eintraege = helfer.zip_eintraege(self.zips[skill])
+            self.assertIn(konfig["praefix"] + konfig["profil"], eintraege, skill)
+            readme = self.skilldatei(skill, konfig["readme"])
+            self.assertIn(
+                "sandbox-exec -f %s" % konfig["profil"], readme, skill
+            )
+            # Die Variable darf nicht als Weg in die Isolation dastehen.
+            self.assertNotIn("%s=seatbelt" % konfig["sandboxvar"], readme, skill)
 
     def test_sandboxprofil_startet_ueberhaupt_ein_programm(self):
         """Ein Profil, unter dem nichts laeuft, schuetzt niemanden.
@@ -157,27 +227,29 @@ class IsolationTest(unittest.TestCase):
             raise unittest.SkipTest("sandbox-exec nicht vorhanden")
         arbeit = tempfile.mkdtemp(prefix="nightshift-sb-")
         try:
-            profil = os.path.join(arbeit, "nightshift-sandbox.sb")
-            with open(profil, "w") as datei:
-                datei.write(self.datei("nightshift-sandbox.sb"))
-            lauf = subprocess.run(
-                ["sandbox-exec", "-f", profil, "/bin/echo", "start-ok"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            )
-            ausgabe = lauf.stdout.decode("utf-8", "replace")
-            self.assertEqual(0, lauf.returncode, ausgabe)
-            self.assertIn("start-ok", ausgabe)
+            for skill, konfig in SKILLS.items():
+                profil = os.path.join(arbeit, konfig["profil"])
+                with open(profil, "w") as datei:
+                    datei.write(self.skilldatei(skill, konfig["profil"]))
+                lauf = subprocess.run(
+                    ["sandbox-exec", "-f", profil, "/bin/echo", "start-ok"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                )
+                ausgabe = lauf.stdout.decode("utf-8", "replace")
+                self.assertEqual(0, lauf.returncode, "%s: %s" % (skill, ausgabe))
+                self.assertIn("start-ok", ausgabe, skill)
 
-            # Und die Sonde, an der der Runner die Isolation erkennt:
-            # /Users muss unter dem Profil unlesbar sein.
-            lauf = subprocess.run(
-                ["sandbox-exec", "-f", profil, "/bin/ls", "/Users"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            )
-            self.assertNotEqual(
-                0, lauf.returncode,
-                "unter dem Profil ist /Users lesbar, dann traegt die Sonde nicht",
-            )
+                # Und die Sonde, an der der Runner die Isolation erkennt:
+                # /Users muss unter dem Profil unlesbar sein.
+                lauf = subprocess.run(
+                    ["sandbox-exec", "-f", profil, "/bin/ls", "/Users"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                )
+                self.assertNotEqual(
+                    0, lauf.returncode,
+                    "%s: unter dem Profil ist /Users lesbar, dann traegt die "
+                    "Sonde nicht" % skill,
+                )
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
 
@@ -215,6 +287,10 @@ class IsolationTest(unittest.TestCase):
             umgebung = dict(os.environ)
             umgebung["PATH"] = stubordner + os.pathsep + umgebung.get("PATH", "")
             umgebung["NIGHTSHIFT_PROJEKT"] = arbeit
+            # Eigene Sperrdatei je Test. Ohne sie teilen sich alle Laeufe
+            # /tmp/nightshift.pid, und zwei gleichzeitige Testlaeufe sehen
+            # einander als "laeuft bereits" statt als getrennte Faelle.
+            umgebung["NIGHTSHIFT_PIDDATEI"] = os.path.join(arbeit, "lauf.pid")
             umgebung.pop("NIGHTSHIFT_SANDBOXED", None)
             umgebung.pop("NIGHTSHIFT_ALLOW_UNSANDBOXED", None)
             def starte(zusatz):
@@ -253,26 +329,128 @@ class IsolationTest(unittest.TestCase):
         finally:
             shutil.rmtree(arbeit, ignore_errors=True)
 
+    def test_24x7_runner_bricht_ohne_isolation_ab_und_laeuft_mit_optout(self):
+        """Dieselbe Schranke wie bei Nightshift, jetzt auch fuer den Daemon.
+
+        Der Runner laeuft endlos, die Pruefung steht aber vor der Schleife.
+        Der Abbruchfall ist deshalb direkt messbar; fuer den Opt-out-Fall
+        startet der Test den Runner im Hintergrund, wartet auf das Banner und
+        beendet ihn wieder. Ein claude-Stub sorgt dafuer, dass in keinem Zweig
+        ein API-Aufruf entsteht.
+        """
+        if in_container():
+            raise unittest.SkipTest(
+                "dieser Test braucht eine Maschine ohne Container: "
+                "hier misst der Runner zu Recht 'docker'"
+            )
+        if shutil.which("timeout") is None and shutil.which("gtimeout") is None:
+            raise unittest.SkipTest(
+                "der Runner bricht ohne timeout schon vor der Isolationspruefung ab"
+            )
+        arbeit = tempfile.mkdtemp(prefix="24x7-lauf-")
+        try:
+            for name in ("runner.sh", "sandbox.sb"):
+                with open(os.path.join(arbeit, name), "w") as datei:
+                    datei.write(self.skilldatei("24x7", name))
+            os.makedirs(os.path.join(arbeit, "idle"))
+            with open(os.path.join(arbeit, "idle", "idle-tasks.md"), "w") as datei:
+                datei.write(self.skilldatei("24x7", "idle/idle-tasks.md"))
+
+            stubordner = os.path.join(arbeit, "bin")
+            os.makedirs(stubordner)
+            stub = os.path.join(stubordner, "claude")
+            with open(stub, "w") as datei:
+                datei.write("#!/bin/bash\necho '{\"type\":\"result\"}'\nexit 0\n")
+            os.chmod(stub, 0o755)
+
+            umgebung = dict(os.environ)
+            umgebung["PATH"] = stubordner + os.pathsep + umgebung.get("PATH", "")
+            umgebung["CLAUDE_24X7_WORKSPACE"] = arbeit
+            umgebung["CLAUDE_24X7_PIDDATEI"] = os.path.join(arbeit, "lauf.pid")
+            umgebung.pop("CLAUDE_24X7_SANDBOXED", None)
+            umgebung.pop("CLAUDE_24X7_ALLOW_UNSANDBOXED", None)
+            skript = os.path.join(arbeit, "runner.sh")
+
+            def starte(zusatz):
+                # Die PID-Datei liegt fest unter /tmp; ein Rest aus einem
+                # frueheren Lauf wuerde den Start mit Exit 1 abweisen.
+                if os.path.exists("/tmp/24x7.pid"):
+                    os.remove("/tmp/24x7.pid")
+                eigene = dict(umgebung)
+                eigene.update(zusatz)
+                lauf = subprocess.run(
+                    ["bash", skript],
+                    cwd=arbeit,
+                    env=eigene,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+                return lauf.returncode, lauf.stdout.decode("utf-8", "replace")
+
+            code, ausgabe = starte({})
+            self.assertEqual(3, code, ausgabe)
+            self.assertIn("nicht isoliert", ausgabe)
+
+            # Die Variable schaltet nichts frei, sie wird geprueft.
+            for wert in ("banane", "seatbelt", "docker"):
+                code, ausgabe = starte({"CLAUDE_24X7_SANDBOXED": wert})
+                self.assertEqual(3, code, ausgabe)
+                self.assertIn("gemessen wurde 'keine'", ausgabe)
+
+            # Bewusster Verzicht: der Runner startet und nennt den Zustand.
+            if os.path.exists("/tmp/24x7.pid"):
+                os.remove("/tmp/24x7.pid")
+            eigene = dict(umgebung)
+            eigene["CLAUDE_24X7_ALLOW_UNSANDBOXED"] = "1"
+            protokoll = os.path.join(arbeit, "lauf.log")
+            with open(protokoll, "w") as datei:
+                lauf = subprocess.Popen(
+                    ["bash", skript],
+                    cwd=arbeit,
+                    env=eigene,
+                    stdout=datei,
+                    stderr=subprocess.STDOUT,
+                )
+            try:
+                inhalt = ""
+                for _ in range(120):
+                    time.sleep(0.25)
+                    with open(protokoll) as datei:
+                        inhalt = datei.read()
+                    if "Isolation: keine" in inhalt:
+                        break
+                self.assertIn("ist gesetzt, der Lauf geht weiter", inhalt)
+                self.assertIn("Isolation: keine", inhalt)
+            finally:
+                lauf.terminate()
+                lauf.wait()
+                if os.path.exists("/tmp/24x7.pid"):
+                    os.remove("/tmp/24x7.pid")
+        finally:
+            shutil.rmtree(arbeit, ignore_errors=True)
+
     def test_compose_datei_ist_fuer_docker_compose_gueltig(self):
         kommando = compose_kommando()
         if kommando is None:
             raise unittest.SkipTest("kein docker compose erreichbar")
-        arbeit = tempfile.mkdtemp(prefix="nightshift-compose-")
-        try:
-            for name in ("docker-compose.yml", "Dockerfile"):
-                with open(os.path.join(arbeit, name), "w") as datei:
-                    datei.write(self.datei(name))
-            lauf = subprocess.run(
-                kommando + ["-f", os.path.join(arbeit, "docker-compose.yml"), "config"],
-                cwd=arbeit,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            ausgabe = lauf.stdout.decode("utf-8", "replace")
-            self.assertEqual(0, lauf.returncode, ausgabe)
-            self.assertIn("nightshift", ausgabe)
-        finally:
-            shutil.rmtree(arbeit, ignore_errors=True)
+        for skill, konfig in SKILLS.items():
+            arbeit = tempfile.mkdtemp(prefix="nightshift-compose-")
+            try:
+                for name in ("docker-compose.yml", "Dockerfile"):
+                    with open(os.path.join(arbeit, name), "w") as datei:
+                        datei.write(self.skilldatei(skill, name))
+                lauf = subprocess.run(
+                    kommando
+                    + ["-f", os.path.join(arbeit, "docker-compose.yml"), "config"],
+                    cwd=arbeit,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+                ausgabe = lauf.stdout.decode("utf-8", "replace")
+                self.assertEqual(0, lauf.returncode, "%s: %s" % (skill, ausgabe))
+                self.assertIn(konfig["dienst"], ausgabe, skill)
+            finally:
+                shutil.rmtree(arbeit, ignore_errors=True)
 
 
 if __name__ == "__main__":

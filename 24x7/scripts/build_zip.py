@@ -4,8 +4,26 @@ Claude 24x7 — ZIP Builder
 Erzeugt einen endlosen Runner mit Inbox/Outbox-Architektur
 """
 
-import json, os, re, zipfile
+import json, os, re, sys, zipfile
 from datetime import datetime
+
+# Die Schutzschicht steht in gemeinsam.py, damit beide Skills dieselbe haben
+# und nicht zwei Kopien auseinanderlaufen. Im Repo liegt die Datei im
+# Wurzelverzeichnis, im installierten Skill neben diesem Skript; gesucht wird
+# an beiden Stellen. Bytecode wird nicht geschrieben, sonst legt der Skill
+# beim ersten Lauf ein __pycache__ in ~/.claude/skills ab.
+sys.dont_write_bytecode = True
+_HIER = os.path.dirname(os.path.abspath(__file__))
+for _ort in (_HIER, os.path.dirname(os.path.dirname(_HIER))):
+    if os.path.isfile(os.path.join(_ort, "gemeinsam.py")):
+        sys.path.insert(0, _ort)
+        break
+else:
+    raise SystemExit(
+        "ERROR: gemeinsam.py nicht gefunden. Erwartet neben diesem Skript "
+        "oder im Wurzelverzeichnis des Repos."
+    )
+import gemeinsam
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║  VARIABLEN ANPASSEN                                     ║
@@ -19,6 +37,11 @@ POLL_INTERVAL = 30          # Sekunden zwischen Inbox-Checks
 MAX_TASK_MINUTES = 60       # Timeout pro Task
 IDLE_TIMEOUT_MINUTES = 15   # Timeout für Idle-Tasks
 IDLE_BEHAVIOR = "cleanup"   # cleanup | docs | tests | sleep
+
+# Wohin der Container nach draussen darf. Alles andere beantwortet der
+# Proxy mit 403.
+NETZ_ALLOWLIST = ["api.anthropic.com"]
+NETZ_ALLOWLIST_TEXT = ", ".join("`%s`" % host for host in NETZ_ALLOWLIST)
 
 # ════════════════════════════════════════════════════════════
 #  AB HIER NICHTS ÄNDERN
@@ -115,57 +138,22 @@ Nichts. Session sofort beenden.
 """
 }
 
-# ── PreToolUse-Hook: rote Zone ──────────────────────────────
-# Das Muster wird im Hook einfach gequotet, damit Backslashes
-# unveraendert bei grep ankommen. Anfuehrungszeichen schneidet der
-# Hook vor dem grep mit tr aus dem Kommando, deshalb muss das Muster
-# sie nicht kennen und rm -rf "/" blockt genauso wie rm -rf /.
-# Die rm-Regel trifft gefaehrliche Ziele: Wurzel, Home und dessen
-# direkte Kinder, Globs, Elternpfade, Systemordner, .git. Nicht
-# getroffen wird das taegliche Aufraeumen, auch nicht mit absolutem
-# Pfad: "rm -rf node_modules", "rm -rf /Users/ich/projekt/dist",
-# "rm -f *.log" laufen durch.
-BLOCK_PATTERN = (
-    "rm +(-[A-Za-z-]+ +)*("
-    "/( |$)|/\\*/?( |$)|\\*/?( |$)|\\./\\*/?( |$)|\\.\\.|\\./?( |$)|\\.git/?( |$)"
-    "|(~|\\$HOME|/home|/Users|/Volumes|/private)(/[^/ ]+)?/?( |$)"
-    "|/(bin|boot|dev|etc|lib|opt|root|sbin|sys|usr|var"
-    "|Applications|Library|System)( |/|$)"
-    ")"
-    "|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\|.*bash|eval |> /dev/sd"
-)
-
-# Ohne jq kann der Hook nichts pruefen. Dann blockt er und sagt warum,
-# statt still durchzuwinken (fail closed).
-BLOCK_CMD = (
-    "bash -c '"
-    "if ! command -v jq >/dev/null 2>&1; then "
-    'echo "24x7 BLOCKED: jq nicht gefunden, Kommando nicht pruefbar" >&2; exit 2; '
-    "fi; "
-    "INPUT=$(cat); "
-    'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
-    '{ echo "24x7 BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
-    'if [ -n "$CMD" ] && printf "%s" "$CMD" | tr -d "\\047\\042" | grep -qE '
-    "'\\''" + BLOCK_PATTERN + "'\\''; then "
-    'echo "24x7 BLOCKED: Destruktiver Befehl" >&2; exit 2; '
-    "fi; "
-    "exit 0'"
+# ── PreToolUse-Hooks: rote Zone ─────────────────────────────
+# Zwei Schranken, beide aus gemeinsam.py:
+#   Bash                              prueft den Kommandotext
+#   Write, Edit, MultiEdit, NotebookEdit  prueft den Zielpfad
+# CLAUDE.md verlangt seit jeher "NIEMALS Pfade ausserhalb des Workspace
+# schreiben". Bis Welle 6 war das eine Bitte an das Modell; die Pfadschranke
+# macht die Schreibhaelfte davon zu einer Regel, die auch dann greift, wenn
+# das Modell sie vergisst.
+PRETOOLUSE = gemeinsam.pretooluse(
+    "24x7", "CLAUDE_24X7_WORKSPACE", WORKSPACE
 )
 
 
 SETTINGS = {
     "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "Bash",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": BLOCK_CMD,
-                    }
-                ],
-            }
-        ],
+        "PreToolUse": PRETOOLUSE,
         "PostToolUse": [
             {
                 "matcher": "",
@@ -180,10 +168,49 @@ SETTINGS = {
     }
 }
 
+# ── Container und Isolation: Gehaeuse aus gemeinsam.py ──────
+# Bis Welle 6 gab es beides nur fuer Nightshift. Die Vorlagen stehen in
+# gemeinsam.py, hier stehen nur die Namen. Der Workspace liegt im Container
+# unter /workspace, nicht unter dem Pfad, der beim Generieren gesetzt war.
+_NAMEN = {
+    "TITEL": "24x7",
+    "MOUNT": "/workspace",
+    "DOCKERSKRIPT": "24x7-docker.sh",
+    "STARTSKRIPT": "runner.sh",
+    "SANDBOXVAR": "CLAUDE_24X7_SANDBOXED",
+    "ALLOWVAR": "CLAUDE_24X7_ALLOW_UNSANDBOXED",
+    "PFADVAR": "CLAUDE_24X7_WORKSPACE",
+    "PROFILNAME": "24x7",
+    "PROFILDATEI": "sandbox.sb",
+    "GEGENSTAND": "der Workspace",
+    "GEGENSTAND_AKK": "den Workspace",
+    "PFADSHELL": "WORKSPACE",
+    "DIENST": "24x7",
+    "HOSTPFAD": WORKSPACE,
+    "SPEICHER": "4g",
+    "READMENAME": "README.md",
+    "ZWECK": "Baut den Container und laesst den 24x7-Runner darin laufen.",
+    "KOPF": "24x7, isoliert. Der Standardweg auf Linux und macOS.",
+    "WERKZEUGNOTIZ": (
+        "# coreutils bringt timeout mit, das der Runner fuer den Task-Deckel\n"
+        "# braucht und das ein nacktes macOS nicht hat."
+    ),
+    "ALLOWLIST": gemeinsam.allowlist_argumente(NETZ_ALLOWLIST),
+    "ZUSATZENV": "",
+    "HOME": HOMEDIR,
+    "FREIGABENAME": "Workspace-Freigabe",
+}
+
+DOCKER_LOGS = "docker compose logs -f 24x7"
+
+DOCKERFILE = gemeinsam.dockerfile(_NAMEN)
+DOCKER_COMPOSE = gemeinsam.compose(_NAMEN)
+DOCKER_SH = gemeinsam.docker_sh(_NAMEN, gemeinsam.DOCKER_SH_DAEMON)
+
 RUNNER_SH = f"""#!/bin/bash
 set -uo pipefail
 
-WORKSPACE="{WORKSPACE}"
+WORKSPACE="${{CLAUDE_24X7_WORKSPACE:-{WORKSPACE}}}"
 INBOX="$WORKSPACE/inbox"
 WORKING="$WORKSPACE/working"
 OUTBOX="$WORKSPACE/outbox"
@@ -209,8 +236,15 @@ else
     exit 1
 fi
 
+@@ISOLATION_MESSEN@@
+@@ISOLATION_ABBRUCH@@
+# Beides steht vor dem PID-Lock und vor der trap-Zeile. cleanup endet
+# mit exit 0, und ein Abbruch dahinter kaeme als 0 beim Aufrufer an.
+
 # PID-Lock: Verhindert doppelten Start
-PIDFILE="/tmp/24x7.pid"
+# Denselben Ort wie der Watchdog, der CLAUDE_24X7_PIDDATEI liest. Ein fest
+# verdrahteter Pfad hier laesst ihn bei gesetzter Variable ins Leere sehen.
+PIDFILE="${{CLAUDE_24X7_PIDDATEI:-/tmp/24x7.pid}}"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "❌ 24x7 Runner läuft bereits (PID $(cat "$PIDFILE"))"
     echo "   Beenden: kill $(cat "$PIDFILE")"
@@ -244,6 +278,7 @@ echo "  Workspace: $WORKSPACE" | tee -a "$LOGFILE"
 echo "  Poll-Intervall: ${{POLL}}s" | tee -a "$LOGFILE"
 echo "  Task-Timeout: {MAX_TASK_MINUTES} Min (via $TIMEOUT_BIN)" | tee -a "$LOGFILE"
 echo "  Idle: {IDLE_BEHAVIOR}" | tee -a "$LOGFILE"
+echo "  Isolation: $ISOLATION" | tee -a "$LOGFILE"
 echo "  Log: $LOGFILE" | tee -a "$LOGFILE"
 echo "  PID: $$" | tee -a "$LOGFILE"
 echo "============================================" | tee -a "$LOGFILE"
@@ -359,11 +394,16 @@ Wenn fertig: Session beenden." \\
     sleep $POLL
   fi
 done
-"""
+""".replace(
+    "@@ISOLATION_MESSEN@@", gemeinsam.isolation_messen(_NAMEN)
+).replace(
+    "@@ISOLATION_ABBRUCH@@", gemeinsam.isolation_abbruch(_NAMEN)
+)
 
 RUNNER_BG_SH = f"""#!/bin/bash
 echo "Starte Claude 24x7 im Hintergrund..."
-nohup bash "{WORKSPACE}/runner.sh" > /tmp/24x7-nohup.log 2>&1 &
+WORKSPACE="${{CLAUDE_24X7_WORKSPACE:-{WORKSPACE}}}"
+nohup bash "$WORKSPACE/runner.sh" > /tmp/24x7-nohup.log 2>&1 &
 PID=$!
 echo ""
 echo "  PID:      $PID"
@@ -377,12 +417,23 @@ echo "  mkdir -p {WORKSPACE}/inbox/mein-task/materials"
 echo "  nano {WORKSPACE}/inbox/mein-task/task.md"
 """
 
+_WATCHDOG = dict(
+    _NAMEN,
+    MARKE="24x7",
+    AKTIONVAR="CLAUDE_24X7_WATCHDOG_AKTION",
+    NEUSTARTVAR="CLAUDE_24X7_WATCHDOG_NEUSTARTS",
+    FRISTVAR="CLAUDE_24X7_WATCHDOG_FRIST",
+    PIDVAR="CLAUDE_24X7_PIDDATEI",
+    PIDDATEI="/tmp/24x7.pid",
+    STARTSKRIPT="runner-bg.sh",
+)
+
 WATCHDOG_SH = f"""#!/bin/bash
 TIMEOUT=${{1:-{MAX_TASK_MINUTES * 60 + 120}}}
-HEARTBEAT="/tmp/24x7-heartbeat.log"
-LOGFILE="/tmp/24x7-$(date +%Y%m%d).log"
-
-echo "🔍 24x7 Watchdog aktiv (Timeout: ${{TIMEOUT}}s)"
+HEARTBEAT="${{CLAUDE_24X7_HEARTBEAT:-/tmp/24x7-heartbeat.log}}"
+WORKSPACE="${{CLAUDE_24X7_WORKSPACE:-{WORKSPACE}}}"
+@@REAKTION@@
+echo "🔍 24x7 Watchdog aktiv (Timeout: ${{TIMEOUT}}s, Aktion: $AKTION)"
 echo ""
 
 while true; do
@@ -402,57 +453,26 @@ while true; do
   DIFF=$((NOW - LAST))
 
   # Status
-  INBOX_COUNT=$(find "{WORKSPACE}/inbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  WORKING_COUNT=$(find "{WORKSPACE}/working" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  DONE_COUNT=$(find "{WORKSPACE}/outbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  FAILED_COUNT=$(find "{WORKSPACE}/failed" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  INBOX_COUNT=$(find "$WORKSPACE/inbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  WORKING_COUNT=$(find "$WORKSPACE/working" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  DONE_COUNT=$(find "$WORKSPACE/outbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  FAILED_COUNT=$(find "$WORKSPACE/failed" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
 
   if [ $DIFF -gt $TIMEOUT ]; then
     echo "⚠️  $(date +%H:%M:%S): KEIN HEARTBEAT seit ${{DIFF}}s!"
-    osascript -e 'display notification "Claude 24x7 hängt!" with title "24x7 Watchdog"' 2>/dev/null || true
+    osascript -e 'display notification "Claude 24x7 haengt!" with title "24x7 Watchdog"' 2>/dev/null || true
+    stillstand_behandeln
   else
     echo "✅ $(date +%H:%M:%S): OK (${{DIFF}}s) | 📥$INBOX_COUNT 🔄$WORKING_COUNT ✅$DONE_COUNT ❌$FAILED_COUNT"
   fi
 
   sleep 60
 done
-"""
+""".replace(
+    "@@REAKTION@@", gemeinsam.watchdog_reaktion(_WATCHDOG)
+)
 
-SANDBOX_SB = f"""(version 1)
-(deny default)
-
-(allow process-fork process-exec)
-(allow signal (target self))
-
-(allow file-read* (subpath "/usr"))
-(allow file-read* (subpath "/bin"))
-(allow file-read* (subpath "/Library"))
-(allow file-read* (subpath "/opt/homebrew"))
-(allow file-read* (subpath "/private/tmp"))
-(allow file-read* (subpath "/private/var"))
-(allow file-read* (subpath "/dev"))
-(allow file-read* (subpath "/etc"))
-(allow file-read* (subpath "/var"))
-
-;; NUR Workspace + /tmp beschreibbar
-(allow file-read* file-write* (subpath "{WORKSPACE}"))
-(allow file-read* file-write* (subpath "/tmp"))
-(allow file-read* file-write* (subpath "/private/tmp"))
-
-;; Home: nur was Claude Code braucht (read-only)
-(allow file-read* (subpath "{HOMEDIR}/.claude"))
-(allow file-read* (subpath "{HOMEDIR}/.npm-global"))
-(allow file-read* (subpath "{HOMEDIR}/.config"))
-(allow file-read* (subpath "{HOMEDIR}/.bun"))
-(allow file-read* (subpath "{HOMEDIR}/.nvm"))
-(allow file-read* (subpath "{HOMEDIR}/.cargo"))
-
-;; Netzwerk: nur HTTPS
-(allow network-outbound (remote tcp "*:443"))
-(allow system-socket)
-(allow sysctl-read)
-(allow mach-lookup)
-"""
+SANDBOX_SB = gemeinsam.sandbox_profil(_NAMEN)
 
 EXAMPLE_TASK = """## Task: README für Projekt erstellen
 Priorität: mittel
@@ -488,13 +508,15 @@ else
   cp -R /path/to/24x7-setup/.claude/. .claude/
 fi
 test -f .claude/settings.json && echo "hooks in place" || echo "WARNING: no hooks"
-chmod +x runner.sh runner-bg.sh watchdog.sh
+chmod +x runner.sh runner-bg.sh watchdog.sh 24x7-docker.sh
 
-# 2. Start
+# 2. Start, isolated (the default)
 cd {WORKSPACE}
-./runner-bg.sh
+export ANTHROPIC_API_KEY=sk-ant-...
+./24x7-docker.sh              # builds the container and starts the runner in it
+./24x7-docker.sh --logs       # same, and follows the log
 
-# 3. Watchdog (second terminal)
+# 3. Watchdog (second terminal, host runs only)
 ./watchdog.sh
 ```
 
@@ -560,7 +582,119 @@ pkill -f "runner.sh"
 kill $(cat /tmp/24x7.pid 2>/dev/null)
 ```
 
-## With Sandbox (recommended)
+## Watchdog
+
+```bash
+./watchdog.sh                       # Alert after the task timeout plus two minutes without heartbeat
+./watchdog.sh 300                   # Alert after 5 min
+```
+
+Detecting a stall was always there. Reacting to one is what the three actions
+add. Set `CLAUDE_24X7_WATCHDOG_AKTION`:
+
+| Action | What happens on a stall |
+|---|---|
+| `melden` (default) | One line on stdout and a macOS notification. Nothing is stopped. |
+| `beenden` | `TERM` to the PID in `/tmp/24x7.pid`, `KILL` after `CLAUDE_24X7_WATCHDOG_FRIST` seconds (default 20), then the watchdog exits. |
+| `neustart` | The same, and then the run is started again, at most `CLAUDE_24X7_WATCHDOG_NEUSTARTS` times (default 1). |
+
+```bash
+CLAUDE_24X7_WATCHDOG_AKTION=neustart ./watchdog.sh 600
+```
+
+**A run that ended on its own is never restarted.** The watchdog only restarts
+what it just terminated itself, and it recognises that by a live PID in
+`/tmp/24x7.pid`. A budget stop ends the run, so afterwards there is no live PID
+and the watchdog reports instead of restarting. Same for a crash and for a
+finished run. A restart begins with an empty `working/`: the runner moves the task it was on to `failed/` while shutting down, and picks the next one from `inbox/`.
+
+**What the watchdog does not cover:**
+
+- **A busy loop.** The heartbeat comes from the `PostToolUse` hook. Claude
+  retrying the same failing test forever keeps writing heartbeats, and to the
+  watchdog that looks healthy. The task timeout is the backstop there, not the watchdog.
+- **A run in the container.** `/tmp` inside the container is a tmpfs of its
+  own, so the heartbeat never reaches the host and a watchdog started there
+  waits forever. Read `docker compose logs -f 24x7` instead.
+- **The reason for the stall.** It restarts, it does not diagnose. If the run
+  hangs on the same step every time, the restart budget runs out and the
+  watchdog exits.
+- **Being started at all.** It is a separate script in a second terminal, and
+  nothing starts it for you.
+- **The isolation the original run had.** The restart runs `runner-bg.sh`, a
+  bare `nohup bash runner.sh`, and the new run inherits the watchdog's
+  environment rather than the terminated run's. A runner fenced by
+  `sandbox-exec` comes back unfenced, measures `keine` and refuses with exit
+  code 3. That fails closed, but it means `neustart` completes only for a
+  host run whose watchdog shell carries the same
+  `CLAUDE_24X7_ALLOW_UNSANDBOXED=1`.
+
+## Isolation
+
+`runner.sh` refuses to start without isolation. The state is **measured, not
+declared**. An environment variable cannot unlock it:
+
+| State | How it is reached | How it is verified | What it means |
+|---|---|---|---|
+| `docker` | `./24x7-docker.sh` | `/.dockerenv`, `/run/.containerenv`, `/proc/1/cgroup` or an overlay root | Only `{WORKSPACE}` is mounted, as `/workspace`. No home directory, no `~/.claude`, no neighbouring projects. Outbound traffic goes through a proxy that allows {NETZ_ALLOWLIST_TEXT} and answers everything else with 403. The image also brings `timeout`, which the task cap needs and a stock macOS does not have. |
+| `seatbelt` | `sandbox-exec -f sandbox.sb ./runner.sh` | the runner can list the workspace but not `/Users`, because the profile denies that read | macOS only, kernel-enforced writes. Reads of the rest of the system and outbound traffic on 443 stay open. Apple has deprecated `sandbox-exec`. |
+| `keine` | plain `./runner.sh` | neither probe answered | The runner aborts with exit code 3. Deliberate opt-out: `CLAUDE_24X7_ALLOW_UNSANDBOXED=1`. |
+
+`CLAUDE_24X7_SANDBOXED` is a cross-check, not a switch: if what it claims
+differs from what was measured, the runner aborts with exit code 3. Setting it
+grants nothing.
+
+Tasks still go into `{WORKSPACE}/inbox/<name>/task.md` on the host. That
+directory is the mount, so the runner in the container sees a new task
+immediately.
+
+What the container does not give you: the watchdog. `/tmp` inside the
+container is a tmpfs of its own, and the heartbeat is written there, so a
+watchdog started on the host never sees it. Use `{DOCKER_LOGS}` instead.
+
+```bash
+./24x7-docker.sh                                  # Container, the default
+sandbox-exec -f sandbox.sb ./runner.sh            # macOS option
+CLAUDE_24X7_ALLOW_UNSANDBOXED=1 ./runner-bg.sh    # No isolation, on purpose
+```
+
+## The Two Barriers
+
+`.claude/settings.json` installs two `PreToolUse` hooks. They look at
+different things, and the second one is the newer of the two:
+
+| Matcher | What it examines | What it does |
+|---|---|---|
+| `Bash` | the command text | blocks `rm` against dangerous targets, `sudo`, `mkfs`, `dd` to a device, `chmod 777`, `curl \| bash`, `eval` |
+| `Write\|Edit\|MultiEdit\|NotebookEdit` | the target path | blocks every write outside `{WORKSPACE}`, plus `.claude/settings.json` inside it |
+
+The path guard normalises before it compares: `~/` becomes your home
+directory, `.` and `..` are resolved. `{WORKSPACE}/../elsewhere/x` is therefore
+outside and gets blocked, and a relative path is resolved against the working
+directory Claude Code sends with the call. Without `jq` neither hook can read
+its input, and both then block instead of waving the call through.
+
+The root comes from `CLAUDE_24X7_WORKSPACE` at run time and defaults to `{WORKSPACE}`.
+
+**What the path guard does not cover:**
+
+- **Writes through Bash.** `echo > file`, `tee`, `cp`, `mv`, `>>` are Bash
+  calls. They reach the first hook, and that one checks no paths.
+- **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
+  readable stays readable.
+- **Symlinks.** The comparison is textual. A link inside the directory that
+  points outside is not followed and passes.
+- **Two names for one directory.** To a text comparison `/tmp` and
+  `/private/tmp` are two places; on macOS they are one.
+- **Tools from MCP servers.** They carry their own names, and no matcher here
+  catches them.
+- **A `.claude/settings.json` that never got installed.** Both hooks exist
+  only if that file is in place: `test -f .claude/settings.json`.
+
+## Without a Container (macOS)
+
+The seatbelt profile is the fallback when Docker is not available. It fences
+writes at the kernel level and nothing else.
 
 ```bash
 sandbox-exec -f sandbox.sb ./runner.sh
@@ -610,6 +744,9 @@ if __name__ == "__main__":
         "runner.sh": RUNNER_SH,
         "runner-bg.sh": RUNNER_BG_SH,
         "watchdog.sh": WATCHDOG_SH,
+        "24x7-docker.sh": DOCKER_SH,
+        "Dockerfile": DOCKERFILE,
+        "docker-compose.yml": DOCKER_COMPOSE,
         "sandbox.sb": SANDBOX_SB,
         "idle/idle-tasks.md": idle_content,
         "inbox/.gitkeep": "",

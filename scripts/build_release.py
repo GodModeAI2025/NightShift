@@ -50,6 +50,9 @@ UNIX = 3
 # Was in welches Archiv gehoert. Links der Pfad im Repo, rechts der Pfad im
 # Archiv. Eine Allowlist, keine Filterliste: was hier nicht steht, kann nicht
 # ins Artefakt geraten, auch kein __pycache__, kein .git, kein index.html.
+# gemeinsam.py liegt im Repo einmal und im Artefakt neben build_zip.py.
+# Ohne diesen Eintrag bricht der installierte Skill beim ersten Aufruf ab:
+# der Generator holt die Schutzschicht aus dieser Datei.
 SKILLS = {
     "nightshift": {
         "artefakt": "nightshift.skill",
@@ -57,6 +60,7 @@ SKILLS = {
             ("LICENSE", "nightshift/LICENSE"),
             ("nightshift/SKILL.md", "nightshift/SKILL.md"),
             ("nightshift/scripts/build_zip.py", "nightshift/scripts/build_zip.py"),
+            ("gemeinsam.py", "nightshift/scripts/gemeinsam.py"),
         ],
     },
     "24x7": {
@@ -65,6 +69,7 @@ SKILLS = {
             ("LICENSE", "24x7/LICENSE"),
             ("24x7/SKILL.md", "24x7/SKILL.md"),
             ("24x7/scripts/build_zip.py", "24x7/scripts/build_zip.py"),
+            ("gemeinsam.py", "24x7/scripts/gemeinsam.py"),
         ],
     },
 }

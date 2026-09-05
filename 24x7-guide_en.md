@@ -272,7 +272,12 @@ Stop:     kill 12345
 
 ```bash
 ./watchdog.sh
+
+# React instead of only reporting:
+CLAUDE_24X7_WATCHDOG_AKTION=neustart ./watchdog.sh
 ```
+
+`beenden` sends TERM to the runner and KILL 20 seconds later, `neustart` starts it again afterwards, once by default. The task it was working on lands in `failed/`, which the runner's trap takes care of. Only a runner the watchdog terminated itself gets restarted.
 
 Shows live status every 60 seconds:
 ```
@@ -352,7 +357,9 @@ Each task gets a fresh Claude session. Claude does not remember the previous tas
 Default: 60 minutes. Tasks taking longer are killed and moved to `failed/`. Adjust `MAX_SECONDS` in `runner.sh` if needed.
 
 ### Workspace Isolation
-Writes are the part that holds: with the sandbox profile active, Claude can only write to the workspace and /tmp. Everything else is an agreement in CLAUDE.md, not enforcement. The profile grants read access to `$HOME/.claude` and `$HOME/.config`, and it allows outbound TCP on port 443 to any host, so reads outside the workspace and traffic to arbitrary endpoints are possible. Without `sandbox-exec` even the write restriction is gone.
+The container is the default and `runner.sh` refuses to start without one: `./24x7-docker.sh` builds the image and runs the daemon in it, with the workspace mounted at `/workspace` and outbound traffic through an allowlist proxy. Without a container and without the seatbelt profile the runner ends with exit code 3; `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` is the deliberate way past it. The watchdog only works for a run on the host, because the container has its own `/tmp` and the heartbeat lands there.
+
+Writes are the part that holds. The PreToolUse hook checks the target path of every Write, Edit, MultiEdit and NotebookEdit and ends the call with exit code 2 when it points outside the workspace; with the sandbox profile active, the kernel adds the same restriction for everything the run writes, including through Bash. What neither covers: reads, and a write that a Bash command performs when the profile is not running. That part is an agreement in CLAUDE.md, not enforcement. The profile grants read access to `$HOME/.claude` and `$HOME/.config`, and it allows outbound TCP on port 443 to any host, so reads outside the workspace and traffic to arbitrary endpoints are possible. Without `sandbox-exec` even the write restriction is gone.
 
 ---
 

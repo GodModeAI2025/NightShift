@@ -41,7 +41,7 @@ A markdown file with checkboxes that Claude reads before each step. After contex
 
 **Layer 2: Hooks (Guardrails)**
 Claude Code hooks are scripts that fire on specific events:
-- `PreToolUse` — Carries `"matcher": "Bash"`, so it runs before every Bash call and never sees `Write` or `Edit`. Blocks command patterns like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`.
+- `PreToolUse` — Two entries, because one question is not the other. `"matcher": "Bash"` examines the command text and blocks patterns like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`. `"matcher": "Write|Edit|MultiEdit|NotebookEdit"` examines the target path and blocks every write outside the project directory. See [The Path Guard](#the-path-guard).
 - `PostToolUse` — Runs after every tool call. Writes a heartbeat timestamp to a log file.
 - `SessionStart` (compact matcher) — Fires after every context compression. Injects "re-read the runbook" into Claude's context.
 - `Stop` (Nightshift only) — Fires every time Claude finishes a response. Every 5 completed steps, reminds Claude of autonomy zones and error budget.
@@ -53,13 +53,13 @@ Nightshift generates a `Dockerfile` and a `docker-compose.yml`. The container mo
 
 The `sandbox-exec` profile stays as the macOS option. It restricts writes at the kernel level: Claude can only write to the project directory and `/tmp`, and `rm -rf ~/` fails without the hook having to catch it. What it does not restrict is reads outside the project and outbound traffic. Apple has deprecated `sandbox-exec`; it still works on current macOS versions. See [What the Sandbox Does Not Cover](#what-the-sandbox-does-not-cover) and [SECURITY.md](SECURITY.md).
 
-24x7 has neither of the two yet. Its runner still starts without any isolation check and its setup contains no container files.
+24x7 gets the same two. `runner.sh` measures the same way, refuses to start unfenced with exit code 3, and `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` is the way past it. Its container mounts the workspace as `/workspace` and starts the daemon in it; `./24x7-docker.sh` builds and runs it, tasks keep arriving in `inbox/` on the host. Dockerfile, Compose file, docker script, seatbelt profile and the isolation check are one implementation in `gemeinsam.py`, filled with different names.
 
 **Layer 3b: Cost Governor (Nightshift)**
 `nightshift-cost.sh` reads Claude's `stream-json` output, adds up the `usage` fields per model and estimates the dollar figure from a dated price table. When the estimate passes the budget, it terminates Claude's whole process group — a grandchild that outlived the parent used to keep the pipe open and the run hanging — and the run ends with exit code 9. Without `jq`, and equally when the stream carries no `usage` events at all, it measures nothing, says `unbekannt` and lets the run continue — a broken counter must not kill a working night, and it must not report a zero it never measured.
 
-**Layer 4: Watchdog (Liveness Monitoring)**
-A separate script that checks the heartbeat file. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm — either a macOS notification or a message you can hook into your own alerting system.
+**Layer 4: Watchdog (Liveness Monitoring and Restart)**
+A separate script that checks the heartbeat file. If Claude hasn't written a heartbeat in N minutes (default: 10), it acts. Which action is `NIGHTSHIFT_WATCHDOG_AKTION` (`CLAUDE_24X7_WATCHDOG_AKTION` for 24x7): `melden` reports and is the default, `beenden` terminates the run, `neustart` terminates it and starts it again. A run that ended on its own is never restarted, because the watchdog only restarts what it just terminated itself. See [The Restart Policy](#the-restart-policy).
 
 ### Why Fresh Sessions Matter (24x7 Design)
 
@@ -473,9 +473,61 @@ NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh    # additional token ceili
 
 `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` runs anyway, and the receipt then says `keine` — never a word somebody typed. The state ends up in the receipt, so afterwards you can tell how a given night was fenced.
 
-Isolation is not the same as the hook. The `PreToolUse` hook greps command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
+Isolation is not the same as the hook. The `Bash` hook greps command text, so it catches typos and obvious mistakes; the path guard measures a target path and holds against `Write`, `Edit` and `NotebookEdit`. Neither of them stops a read, and neither of them stops a write that a Bash command performs.
 
-24x7 does not have this check. Its runner starts under any conditions.
+24x7 runs the same check, with `CLAUDE_24X7_SANDBOXED` as the cross-check and `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` as the opt-out. What it does not have is a budget and a receipt; those are still Nightshift only.
+
+### The Path Guard
+
+The hook used to carry `"matcher": "Bash"` and nothing else. `Write`, `Edit`
+and `NotebookEdit` never reached it, so an unattended run could write any file
+on the disk and the protection layer did not even see it. There is a second
+`PreToolUse` entry now, and it asks a different question:
+
+| Matcher | Examines | Blocks |
+|---|---|---|
+| `Bash` | the command text | `rm` against dangerous targets, `sudo`, `mkfs`, `dd` to a device, `chmod 777`, `curl \| bash`, `eval` |
+| `Write\|Edit\|MultiEdit\|NotebookEdit` | the target path | every write outside the project directory, plus `.claude/settings.json` inside it |
+
+The path is normalised before the comparison: `~/` becomes the home
+directory, `.` and `..` are resolved, a relative path is resolved against the
+working directory Claude Code sends with the call. `$PROJECT/../elsewhere/x`
+therefore lands outside and gets blocked. `$PROJECT-copy/x` gets blocked too;
+the comparison is against the directory, not against a prefix of the string.
+Without `jq` neither hook can read its input, and both then block instead of
+waving the call through.
+
+The root comes from `NIGHTSHIFT_PROJEKT` (`CLAUDE_24X7_WORKSPACE` for 24x7)
+and falls back to the path the setup was generated for. The container sets it
+to `/project`, so the same hook fences the run there. That variable belongs to
+whoever starts the run: hooks inherit the environment of the Claude process,
+and an `export` inside a Bash tool call does not reach it.
+
+Blocking its own configuration is deliberate. A run that may rewrite
+`.claude/settings.json` has no barrier, only a suggestion.
+
+**What the path guard does not cover:**
+
+- **Writes through Bash.** `echo > file`, `tee`, `cp`, `mv`, `>>` are Bash
+  calls. They go to the first hook, and that one checks no paths. This is the
+  largest remaining hole, and it is the reason the container is the default.
+- **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
+  readable stays readable.
+- **Symlinks.** The comparison is textual. A link inside the project that
+  points outside is not followed and passes.
+- **Two names for one directory.** `/tmp` and `/private/tmp` are two places to
+  a text comparison; on macOS they are one directory.
+- **Tools from MCP servers.** They carry their own tool names, and no matcher
+  here catches them.
+- **A settings.json that was never installed.** Both hooks exist only if
+  `.claude/settings.json` is in the project. The install step is a separate
+  command precisely because `cp -r dir/* .` skips dotfiles.
+
+Measured in CI: 14 write targets that must be blocked and 9 that must pass,
+per skill, driven as real tool calls through the hook command taken out of the
+generated `settings.json`. Plus `Edit`, `MultiEdit` and `NotebookEdit` on both
+sides of the boundary, an input without a path, and a run with `jq` removed
+from `PATH`. See [tests/test_pfad_schranke.py](tests/test_pfad_schranke.py).
 
 ### What the Sandbox Does Not Cover
 
@@ -547,6 +599,77 @@ This works well for 10-20 step runbooks. For very long tasks (30+ steps), split 
 
 24x7 avoids the problem entirely by using fresh sessions per task.
 
+### The Restart Policy
+
+The watchdog used to detect a stall and then do nothing about it: one line on
+stdout and a macOS notification that nobody sees at three in the morning. It
+still detects the same thing, but what it does with it is now a choice.
+
+| `NIGHTSHIFT_WATCHDOG_AKTION` | On a stall |
+|---|---|
+| `melden` (default) | Report and keep watching. The old behaviour. |
+| `beenden` | `TERM` to the PID in `/tmp/nightshift.pid`, `KILL` after `NIGHTSHIFT_WATCHDOG_FRIST` seconds (default 20), then the watchdog exits. |
+| `neustart` | The same, then start the run again, at most `NIGHTSHIFT_WATCHDOG_NEUSTARTS` times (default 1). |
+
+24x7 has the same three under `CLAUDE_24X7_WATCHDOG_AKTION`.
+
+The PID file is `/tmp/nightshift.pid` and `/tmp/24x7.pid`. Runner and
+watchdog both take it from `NIGHTSHIFT_PIDDATEI` or `CLAUDE_24X7_PIDDATEI`
+and fall back to those paths. Set the variable for both processes or for
+neither: a watchdog that looks somewhere else finds no PID and reports the
+run as already finished. Two projects on one machine need two different
+values, because the lock refuses a second run while the first holds it.
+
+`TERM` before `KILL` is not politeness. Both runners trap `TERM` and use it to
+shut down: Nightshift ends Claude's process group, 24x7 moves the task it was
+working on to `failed/` and writes a note. A watchdog that went straight to
+`KILL` would leave a task stuck in `working/` forever.
+
+**A run that ended on its own is never restarted.** That is the whole safety
+rule, and it comes from the order of operations rather than from a list of
+exceptions: the watchdog restarts only what it just terminated itself, and it
+recognises that by a live PID in the PID file. A budget stop terminates the
+run, so afterwards there is no live PID, and the watchdog reports instead of
+restarting. A crash and a finished run look the same to it. The roadmap asked
+for a restart that stays blocked after a budget stop; this is that, without a
+second mechanism that could disagree with the first.
+
+**What the watchdog does not cover:**
+
+- **A busy loop.** The heartbeat comes from the `PostToolUse` hook. Claude
+  retrying the same failing test forever keeps writing heartbeats, and to the
+  watchdog that looks perfectly healthy. The `Stop` hook's stall detector is
+  the answer to that case, and it writes text into Claude's context rather
+  than stopping anything.
+- **A run in the container.** `/tmp` in the container is a tmpfs of its own,
+  so the heartbeat never reaches the host and a watchdog started there waits
+  forever for a file that will not appear. `docker compose logs -f` is what
+  you watch instead. This is the reason a host-side restart policy is not the
+  right shape for the default path: `docker compose` restart policies are.
+- **The reason for the stall.** It restarts, it does not diagnose. A run that
+  hangs on the same step every time burns the restart budget and then stops.
+- **Being started at all.** It is a separate script in a second terminal, and
+  nothing starts it for you.
+- **The isolation the original run had.** The restart goes through
+  `nightshift-run-bg.sh` (`runner-bg.sh` for 24x7), a bare `nohup bash
+  run.sh`, and the new run inherits the watchdog's environment rather than the
+  terminated run's. A run fenced by `sandbox-exec` therefore comes back
+  unfenced, measures `keine` and refuses with exit code 3; so does a restart
+  whose watchdog shell has no `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` when the
+  original run had it. That fails closed rather than open, but it means
+  `neustart` today only completes for a host run whose watchdog shell carries
+  the same opt-out. On the container path the question does not arise, because
+  the watchdog cannot see that heartbeat at all. The CI test uses a stub start
+  script, so it measures that the restart happens, not what the restarted run
+  is fenced by.
+
+Measured in CI against a stand-in run, for both skills: `melden` leaves the
+process alive, `beenden` ends it and exits 0, `neustart` ends it and starts the
+run script again, a restart budget of 0 ends it without a restart, an already
+dead run is reported and not restarted, an unknown action behaves like
+`melden`, and the terminated process really receives `TERM` before `KILL`. See
+[tests/test_watchdog.py](tests/test_watchdog.py).
+
 ### Graceful Shutdown
 
 Both runners handle SIGTERM and SIGINT (Ctrl+C) gracefully. On 24x7, an in-progress task is moved to `failed/` with a note. The PID file is cleaned up.
@@ -587,7 +710,10 @@ kill $(cat /tmp/24x7.pid)
 |------|---------|
 | `runner.sh` | Endless loop: poll inbox → spawn Claude → route results |
 | `runner-bg.sh` | Background wrapper using `nohup` |
-| `watchdog.sh` | Heartbeat monitor with live inbox/outbox counters |
+| `24x7-docker.sh` | Builds the container and starts the runner in it |
+| `Dockerfile` | Two targets: runner and egress proxy |
+| `docker-compose.yml` | Workspace at `/workspace`, internal network, hardening |
+| `watchdog.sh` | Heartbeat monitor with live inbox/outbox counters. Host runs only, the container has its own `/tmp` |
 | `sandbox.sb` | macOS sandbox profile |
 | `.claude/settings.json` | PreToolUse + PostToolUse hooks |
 | `CLAUDE.md` | Workspace rules: autonomy zones, error tolerance, workspace memory (decisions.md) |
@@ -602,24 +728,25 @@ Ordered by what blocks users today. No dates attached, this is a private project
 
 **Next**
 
-- **The same three things for 24x7.** Container, budget and receipt exist for Nightshift only. The 24x7 runner still starts without an isolation check, measures nothing and leaves a `log.md` per task instead of a report.
-- **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
+- **Budget and receipt for 24x7.** The container is there now, the other two are not. The runner measures nothing and leaves a `log.md` per task instead of a report. A budget for a task loop is not the Nightshift counter with a new name: it has to carry a total across tasks, and the counter starts from zero per invocation.
 - **Egress control for the seatbelt path.** The container has an allowlist proxy; the seatbelt profile still allows outbound 443 to any host.
 
 **After that**
 
 - **SpecForge tasks.md as a runbook source.** See [Related Projects](#related-projects). The validation checks German section headings and the three zones, so this needs a converter, not a new entry in the genre table.
-- **A restart policy.** The watchdog reports and never restarts. A restart after a budget stop must stay blocked.
 
 **Done in the meantime**
 
 - Container isolation as the default for Nightshift, with the run refusing to start unfenced.
 - A cost governor that measures first and then stops, with the tokens in the receipt.
 - A morning receipt as JSON and Markdown, written from the exit trap so a crashed run has one too.
+- A second `PreToolUse` matcher for `Write`, `Edit`, `MultiEdit` and `NotebookEdit` that measures the target path instead of a command string. Both skills, one implementation in `gemeinsam.py`.
+- Container isolation for 24x7, from the same templates as Nightshift's, with the runner refusing to start unfenced.
+- A restart policy in both watchdogs. A restart after a budget stop stays blocked, because the watchdog only restarts a run it terminated itself.
 
 **Test coverage**
 
-CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, validates the generated `docker-compose.yml`, runs `nightshift-run.sh` against a Claude stub for the isolation check, the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, drives the path guard against a table of write targets inside and outside the project, unpacks the release artifact and runs the generator from that location, drives the three watchdog actions against a stand-in run, validates the generated `docker-compose.yml` of both skills, runs `nightshift-run.sh` and `runner.sh` against a Claude stub for the isolation check, `nightshift-run.sh` for the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
 ## Related Projects
 
@@ -631,10 +758,10 @@ No code moved in either direction. Nothing here is derived from that repository,
 
 Where the two differ, as of 2026-09-04:
 
-- **It has a `shared/` module, this one does not.** Both generators here still carry the hook block, the sandbox profile and the watchdog twice. That duplication is real and it is ours.
+- **Both have a shared module now.** The block pattern and both hook bodies live in `gemeinsam.py`, and a test fails if the two generators stop agreeing. The sandbox profile and the watchdog are still there twice; that duplication is real and it is ours.
 - **Its blocklist is longer.** Fork bombs, force-push and a strict mode are on it. The hook here has no fork-bomb pattern; `nightshift/SKILL.md` says so in the Security section.
 - **Its cost tracker cannot stop a run.** In `plugins/nightshift/scripts/shared/cost_tracker.py`, `CLAUDE_PID` appears exactly once, in the `kill` on line 33, and is never assigned; the budget query uses `grep -oP`, which BSD grep on macOS rejects; and the sums live in the subshell of a pipeline. The counter here writes its state to a file, gets the PID from the runner and kills the process group — `kill -- -PGID` against a group the runner opens with `set -m`, which is what actually reaches a grandchild that outlived its parent — and the budget stop is checked in CI against a stub with exactly such a grandchild. Measuring is the easy half — stopping is the half that has to work.
-- **Its zone enforcement has the same gap as ours.** `matcher: "Bash"` on both sides, blocked paths matched against command text on both sides. A `Write` or `Edit` outside the project passes in either implementation.
+- **Its zone enforcement still stops at Bash.** `matcher: "Bash"` there, blocked paths matched against command text. Here a second matcher measures the target path of `Write`, `Edit`, `MultiEdit` and `NotebookEdit`, and a table in CI drives real tool calls through the generated hook. What passes in both is a write that a Bash command performs.
 - **What is only here:** tests and CI, a tagged release with artifacts, a SECURITY.md, the landing page, and container isolation with an egress allowlist plus a receipt that says what a night cost.
 
 The intended distinguishing feature is executing a `tasks.md` produced by [SpecForge](https://github.com/GodModeAI2025/specforge-ai-skill) as an unattended night. That is not implemented. The 15-point validation expects German section headings and the three autonomy zones, so a SpecForge `tasks.md` fails it by construction; this needs a converter and a second validation path, not another entry in the genre table. It is in the [Roadmap](#roadmap) as such, and it is a plan, not a feature.

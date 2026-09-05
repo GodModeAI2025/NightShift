@@ -12,10 +12,73 @@ cut by tagging `v` plus the content of `VERSION`.
 
 ## [Unreleased]
 
-Nightshift only. 24x7 keeps the state of 1.0.0: no isolation check, no
-measurement, no receipt.
+Cost governor and receipt are still Nightshift only; 24x7 keeps the state of
+1.0.0 there. Container isolation and the path barrier of the PreToolUse hook
+are in both.
 
 ### Added
+
+- A second `PreToolUse` entry in both generated setups:
+  `"matcher": "Write|Edit|MultiEdit|NotebookEdit"`. It resolves the target path
+  of the call. `~/` becomes the home directory, `.` and `..` are resolved, and
+  a relative path is resolved against the working directory Claude Code sends
+  with the call. Every target outside the project or workspace directory ends
+  with exit code 2. The root comes from `NIGHTSHIFT_PROJEKT` or
+  `CLAUDE_24X7_WORKSPACE` at run time, so the same hook fences the run inside
+  the container, where the project sits at `/project`. Without `jq`, and for an
+  input without a path, it blocks instead of waving the call through.
+  `.claude/settings.json` is blocked inside the directory too: a run that may
+  rewrite its own barrier has none. Until now the hook carried
+  `"matcher": "Bash"` alone, and an unattended run could write any file on the
+  disk without the protection layer seeing it.
+- `gemeinsam.py` in the repository root: the block pattern and both hook bodies
+  live there once instead of twice, and both generators read them. The file
+  ships inside both `.skill` artifacts next to `build_zip.py`, and a test
+  unpacks an artifact and runs the generator from that location, because the
+  repository layout and the installed layout are two different places.
+- `tests/test_pfad_schranke.py`: 14 write targets that must be blocked and 9
+  that must pass, per skill, driven as real tool calls through the hook command
+  taken out of the generated `settings.json`. Plus `Edit`, `MultiEdit` and
+  `NotebookEdit` on both sides of the boundary, an input without a path, and a
+  run with `jq` removed from `PATH`. New CI step.
+- A section in both generated READMEs and in README.md that names what the path
+  barrier does not cover: writes performed by a Bash command, every read,
+  symlinks inside the directory pointing out, `/tmp` versus `/private/tmp`,
+  tools from MCP servers, and a `.claude/settings.json` that was never
+  installed.
+- Container isolation for 24x7: `Dockerfile`, `docker-compose.yml` and
+  `24x7-docker.sh` in the generated setup. The workspace is mounted as
+  `/workspace` and is the only path from the host; the home directory lives in
+  a named volume; the runner hangs in an internal network whose only bridge
+  outward is the same allowlist proxy Nightshift uses. Root filesystem
+  read-only, all capabilities dropped, `no-new-privileges`, non-root user.
+  Unlike the Nightshift script this one starts a daemon: `up -d`, and
+  `./24x7-docker.sh --logs` follows the log. Tasks keep arriving in `inbox/`
+  on the host, because that directory is the mount.
+- Isolation detection in `runner.sh`, the same probe Nightshift runs:
+  `docker`, `seatbelt` or `keine`. Without isolation the runner ends with exit
+  code 3 before the task loop starts; `CLAUDE_24X7_ALLOW_UNSANDBOXED=1` is the
+  documented way past it, `CLAUDE_24X7_SANDBOXED` is a cross-check that grants
+  nothing. Both checks sit before the `trap`, because the cleanup handler ends
+  with `exit 0` and would swallow the 3.
+- `WORKSPACE` in `runner.sh` and `runner-bg.sh` now comes from
+  `CLAUDE_24X7_WORKSPACE` and falls back to the generated path. The container
+  sets it to `/workspace`, and the path barrier of the hook reads the same
+  variable, so both agree on where the workspace is.
+- A restart policy in both watchdogs. `NIGHTSHIFT_WATCHDOG_AKTION` and
+  `CLAUDE_24X7_WATCHDOG_AKTION` take `melden` (the old behaviour and still the
+  default), `beenden` (TERM to the PID in the PID file, KILL after
+  `..._WATCHDOG_FRIST` seconds, then the watchdog exits) or `neustart` (the
+  same, then start the run again, at most `..._WATCHDOG_NEUSTARTS` times).
+  TERM before KILL because both runners trap it: Nightshift ends Claude's
+  process group, 24x7 moves the running task to `failed/`.
+  A run that ended on its own is never restarted. The watchdog restarts only
+  what it just terminated itself and recognises that by a live PID, so a
+  budget stop cannot be undone by a restart, and neither can a crash or a
+  finished run. The roadmap asked for exactly that guarantee; it now follows
+  from the order of operations instead of from a second mechanism.
+  `..._PIDDATEI` and `..._HEARTBEAT` make both paths overridable, which is
+  what allows the reaction to be driven in CI without touching a real run.
 
 - `Dockerfile` and `docker-compose.yml` in the generated Nightshift setup,
   plus `nightshift-docker.sh` to build and run it. The container mounts the
@@ -58,6 +121,21 @@ measurement, no receipt.
 
 ### Changed
 
+- The watchdog counts a zombie as ended. `kill -0` answers yes for a process
+  that has exited but not been reaped, so a crashed run whose parent never
+  collected it looked alive and the watchdog would never have acted. It now
+  asks `ps -o state=` as well; without `ps` the old behaviour stands.
+
+- The 24x7 seatbelt profile is the fixed one. It carried the old
+  deny-by-default read rules, under which nothing starts on current macOS
+  (`sandbox-exec -f sandbox.sb /bin/echo hi` ended with SIGABRT); Nightshift's
+  profile was repaired in 1.0.0 and 24x7's was not. Both now come from one
+  template, and the test that starts a program under the profile runs for
+  both.
+- `Dockerfile`, `docker-compose.yml`, the docker script, the seatbelt profile
+  and the isolation check are one implementation in `gemeinsam.py`, filled
+  with the names of each skill. The generated Nightshift files are unchanged
+  byte for byte; that was the acceptance test for the move.
 - `nightshift-run.sh` takes the project path from `NIGHTSHIFT_PROJEKT` and
   falls back to the path from generation time. Without this the container
   would `cd` into the host path, which does not exist there.
@@ -70,6 +148,19 @@ measurement, no receipt.
   permission scoping, not isolation.
 
 ### Fixed
+
+- **The watchdog looked for the run in a place the runner never wrote to.**
+  The new stall reaction reads the PID file from `NIGHTSHIFT_PIDDATEI` or
+  `CLAUDE_24X7_PIDDATEI`, while both runners kept writing to a hardcoded
+  `/tmp/nightshift.pid` or `/tmp/24x7.pid`. Anyone who set the variable got a
+  watchdog that found no PID, reported "no running process" and never acted
+  again, on exactly the stall it exists for. Both runners now read the same
+  variable and keep the old path as the default, so an operator who sets
+  nothing sees no change. A test in `tests/test_watchdog.py` compares the two
+  files against each other instead of trusting the intent. The shared path also
+  made two runs on one machine impossible: a second project could not start
+  while the first held the lock, and a stale file whose PID had been reused by
+  an unrelated process blocked every run until someone deleted it by hand.
 
 - **The generated command line was rejected by Claude Code.** `claude -p
   ... --output-format stream-json` without `--verbose` ends with "When using

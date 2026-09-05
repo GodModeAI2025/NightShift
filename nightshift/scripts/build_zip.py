@@ -417,7 +417,11 @@ BUDGET_TOKENS="${NIGHTSHIFT_BUDGET_TOKENS:-@@BUDGET_TOKENS@@}"
 
 @@ISOLATION_MESSEN@@
 # PID-Lock: Verhindert doppelten Start
-PIDFILE="/tmp/nightshift.pid"
+# Denselben Ort wie der Watchdog. Der liest NIGHTSHIFT_PIDDATEI, und wenn
+# der Runner stattdessen fest /tmp/nightshift.pid schreibt, sucht der
+# Watchdog bei gesetzter Variable an einer Stelle, an der nie etwas steht,
+# und haelt jeden Lauf fuer beendet.
+PIDFILE="${NIGHTSHIFT_PIDDATEI:-/tmp/nightshift.pid}"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "Nightshift laeuft bereits (PID $(cat "$PIDFILE"))"
     echo "   Beenden: kill $(cat "$PIDFILE")"

@@ -26,6 +26,7 @@ SKILLS = {
         "praefix": "nightshift-setup/",
         "watchdog": "nightshift-watchdog.sh",
         "startskript": "nightshift-run-bg.sh",
+        "runner": "nightshift-run.sh",
         "aktionvar": "NIGHTSHIFT_WATCHDOG_AKTION",
         "neustartvar": "NIGHTSHIFT_WATCHDOG_NEUSTARTS",
         "fristvar": "NIGHTSHIFT_WATCHDOG_FRIST",
@@ -36,6 +37,7 @@ SKILLS = {
         "praefix": "24x7-setup/",
         "watchdog": "watchdog.sh",
         "startskript": "runner-bg.sh",
+        "runner": "runner.sh",
         "aktionvar": "CLAUDE_24X7_WATCHDOG_AKTION",
         "neustartvar": "CLAUDE_24X7_WATCHDOG_NEUSTARTS",
         "fristvar": "CLAUDE_24X7_WATCHDOG_FRIST",
@@ -238,6 +240,44 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual(0, code, ausgabe)
         self.assertTrue(os.path.exists(spur), "kein TERM angekommen:\n%s" % ausgabe)
         self.assertFalse(lebt(haenger))
+
+    def test_runner_und_watchdog_sperren_an_derselben_stelle(self):
+        """Beide muessen dieselbe PID-Datei meinen, sonst sucht der Watchdog leer.
+
+        Der Watchdog liest die Variable seit dieser Runde. Schriebe der Runner
+        weiterhin fest nach /tmp, faende der Watchdog bei gesetzter Variable nie
+        eine PID, meldete "kein laufender Prozess" und ruehrte sich nie wieder.
+        Wer die Variable nicht setzt, bekommt weiter den alten Pfad.
+        """
+        for name, konfig in SKILLS.items():
+            with self.subTest(skill=name):
+                runner = helfer.datei_aus_zip(
+                    self.zips[name], konfig["praefix"] + konfig["runner"])
+                watchdog = helfer.datei_aus_zip(
+                    self.zips[name], konfig["praefix"] + konfig["watchdog"])
+                muster = '"${%s:-' % konfig["pidvar"]
+                # assertTrue statt assertIn: assertIn druckt bei einem
+                # Fehlschlag das ganze Skript, und das sind einige hundert
+                # Zeilen Rauschen um eine einzige fehlende Zeile.
+                self.assertTrue(
+                    muster in runner,
+                    "%s liest %s nicht" % (konfig["runner"], konfig["pidvar"]))
+                self.assertTrue(
+                    muster in watchdog,
+                    "%s liest %s nicht" % (konfig["watchdog"], konfig["pidvar"]))
+                self.assertEqual(
+                    self.sperrpfad(runner), self.sperrpfad(watchdog),
+                    "Runner und Watchdog sperren an verschiedenen Stellen")
+
+    @staticmethod
+    def sperrpfad(text):
+        """Der Standardwert hinter :- in der Zeile, die die Sperrdatei setzt."""
+        for zeile in text.split("\n"):
+            nackt = zeile.strip()
+            if nackt.startswith("PIDFILE=") or nackt.startswith("PIDDATEI="):
+                if ":-" in nackt:
+                    return nackt.split(":-", 1)[1].rstrip('"}').strip()
+        return None
 
 
 if __name__ == "__main__":

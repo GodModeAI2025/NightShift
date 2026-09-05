@@ -242,7 +242,9 @@ fi
 # mit exit 0, und ein Abbruch dahinter kaeme als 0 beim Aufrufer an.
 
 # PID-Lock: Verhindert doppelten Start
-PIDFILE="/tmp/24x7.pid"
+# Denselben Ort wie der Watchdog, der CLAUDE_24X7_PIDDATEI liest. Ein fest
+# verdrahteter Pfad hier laesst ihn bei gesetzter Variable ins Leere sehen.
+PIDFILE="${{CLAUDE_24X7_PIDDATEI:-/tmp/24x7.pid}}"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "❌ 24x7 Runner läuft bereits (PID $(cat "$PIDFILE"))"
     echo "   Beenden: kill $(cat "$PIDFILE")"

@@ -287,6 +287,10 @@ class IsolationTest(unittest.TestCase):
             umgebung = dict(os.environ)
             umgebung["PATH"] = stubordner + os.pathsep + umgebung.get("PATH", "")
             umgebung["NIGHTSHIFT_PROJEKT"] = arbeit
+            # Eigene Sperrdatei je Test. Ohne sie teilen sich alle Laeufe
+            # /tmp/nightshift.pid, und zwei gleichzeitige Testlaeufe sehen
+            # einander als "laeuft bereits" statt als getrennte Faelle.
+            umgebung["NIGHTSHIFT_PIDDATEI"] = os.path.join(arbeit, "lauf.pid")
             umgebung.pop("NIGHTSHIFT_SANDBOXED", None)
             umgebung.pop("NIGHTSHIFT_ALLOW_UNSANDBOXED", None)
             def starte(zusatz):
@@ -362,6 +366,7 @@ class IsolationTest(unittest.TestCase):
             umgebung = dict(os.environ)
             umgebung["PATH"] = stubordner + os.pathsep + umgebung.get("PATH", "")
             umgebung["CLAUDE_24X7_WORKSPACE"] = arbeit
+            umgebung["CLAUDE_24X7_PIDDATEI"] = os.path.join(arbeit, "lauf.pid")
             umgebung.pop("CLAUDE_24X7_SANDBOXED", None)
             umgebung.pop("CLAUDE_24X7_ALLOW_UNSANDBOXED", None)
             skript = os.path.join(arbeit, "runner.sh")

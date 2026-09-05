@@ -149,6 +149,19 @@ are in both.
 
 ### Fixed
 
+- **The watchdog looked for the run in a place the runner never wrote to.**
+  The new stall reaction reads the PID file from `NIGHTSHIFT_PIDDATEI` or
+  `CLAUDE_24X7_PIDDATEI`, while both runners kept writing to a hardcoded
+  `/tmp/nightshift.pid` or `/tmp/24x7.pid`. Anyone who set the variable got a
+  watchdog that found no PID, reported "no running process" and never acted
+  again, on exactly the stall it exists for. Both runners now read the same
+  variable and keep the old path as the default, so an operator who sets
+  nothing sees no change. A test in `tests/test_watchdog.py` compares the two
+  files against each other instead of trusting the intent. The shared path also
+  made two runs on one machine impossible: a second project could not start
+  while the first held the lock, and a stale file whose PID had been reused by
+  an unrelated process blocked every run until someone deleted it by hand.
+
 - **The generated command line was rejected by Claude Code.** `claude -p
   ... --output-format stream-json` without `--verbose` ends with "When using
   --print, --output-format=stream-json requires --verbose" and exit 1 on

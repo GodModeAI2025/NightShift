@@ -613,6 +613,13 @@ still detects the same thing, but what it does with it is now a choice.
 
 24x7 has the same three under `CLAUDE_24X7_WATCHDOG_AKTION`.
 
+The PID file is `/tmp/nightshift.pid` and `/tmp/24x7.pid`. Runner and
+watchdog both take it from `NIGHTSHIFT_PIDDATEI` or `CLAUDE_24X7_PIDDATEI`
+and fall back to those paths. Set the variable for both processes or for
+neither: a watchdog that looks somewhere else finds no PID and reports the
+run as already finished. Two projects on one machine need two different
+values, because the lock refuses a second run while the first holds it.
+
 `TERM` before `KILL` is not politeness. Both runners trap `TERM` and use it to
 shut down: Nightshift ends Claude's process group, 24x7 moves the task it was
 working on to `failed/` and writes a note. A watchdog that went straight to

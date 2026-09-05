@@ -303,7 +303,11 @@ mv failed/mein-task inbox/mein-task
 ## Lektion 8: Worauf du achten musst
 
 ### API-Kosten — Das größte Risiko
-24x7 erzeugt **kontinuierlich** API-Calls. Auch Idle-Tasks kosten Geld. Ein Runner mit 10 Tasks pro Tag kostet $20–100/Tag. Setze Idle auf `sleep` um Kosten bei leerer Inbox zu vermeiden. Überwache unter console.anthropic.com.
+24x7 erzeugt **kontinuierlich** API-Calls. Auch der Leerlauf kostet Geld, und zwar mehr als es klingt: bei jedem Idle-Verhalten außer `sleep` arbeitet Claude bis zum Idle-Timeout und pausiert danach nur das Poll-Intervall. Ein Runner mit 10 Tasks pro Tag kostet $20–100/Tag.
+
+Seit dieser Version gibt es eine Grenze. `CLAUDE_24X7_BUDGET_USD` (Vorgabe 50.00) und `CLAUDE_24X7_BUDGET_TOKENS` gelten für den **ganzen Lauf**, nicht pro Task, und der Leerlauf zählt mit. Ist sie erreicht, wandert der laufende Task mit Begründung nach `failed/` und der Runner endet mit Exit-Code 9. Die laufende Summe steht in `24x7-kosten.json` im Workspace-Root, jeder Task bekommt eine `receipt.md` neben seiner Ausgabe.
+
+Die Zahl ist eine Schätzung aus einer datierten Preistabelle. Ohne `jq` misst der Zähler gar nichts und lässt den Lauf weiterlaufen, statt ihn zu beenden. Maßgeblich bleibt console.anthropic.com.
 
 ### Der Runner startet nicht ohne Isolation
 Standardweg ist der Container: `./24x7-docker.sh`. Er baut das Image und startet den Runner darin, der Workspace haengt unter `/workspace`, Tasks wirfst du weiter auf dem Host in `inbox/`. Ohne Container und ohne Seatbelt-Profil bricht `runner.sh` mit Exit 3 ab; bewusst ohne Isolation laufen laesst du ihn mit `CLAUDE_24X7_ALLOW_UNSANDBOXED=1`.

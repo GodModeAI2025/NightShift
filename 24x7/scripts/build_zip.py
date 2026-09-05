@@ -38,6 +38,14 @@ MAX_TASK_MINUTES = 60       # Timeout pro Task
 IDLE_TIMEOUT_MINUTES = 15   # Timeout für Idle-Tasks
 IDLE_BEHAVIOR = "cleanup"   # cleanup | docs | tests | sleep
 
+# Budget fuer den ganzen Daemon-Lauf, nicht pro Task. Zur Laufzeit ueber
+# CLAUDE_24X7_BUDGET_USD ueberschreibbar. Wer die Grenze erreicht, bekommt
+# keinen weiteren Aufruf: der Daemon endet mit 9. Ein Neustart faengt neu
+# an zu zaehlen, auch der des Watchdogs.
+BUDGET_USD = os.environ.get("CLAUDE_24X7_BUDGET_USD", "50.00")
+# Zusaetzliche Obergrenze in Tokens (Ein- plus Ausgabe). 0 heisst: keine.
+BUDGET_TOKENS = os.environ.get("CLAUDE_24X7_BUDGET_TOKENS", "0")
+
 # Wohin der Container nach draussen darf. Alles andere beantwortet der
 # Proxy mit 403.
 NETZ_ALLOWLIST = ["api.anthropic.com"]
@@ -206,6 +214,8 @@ DOCKER_LOGS = "docker compose logs -f 24x7"
 DOCKERFILE = gemeinsam.dockerfile(_NAMEN)
 DOCKER_COMPOSE = gemeinsam.compose(_NAMEN)
 DOCKER_SH = gemeinsam.docker_sh(_NAMEN, gemeinsam.DOCKER_SH_DAEMON)
+COST_SH = gemeinsam.cost_sh("24x7")
+RECEIPT_SH = gemeinsam.receipt_sh("24x7", "runner.sh")
 
 RUNNER_SH = f"""#!/bin/bash
 set -uo pipefail
@@ -217,9 +227,30 @@ OUTBOX="$WORKSPACE/outbox"
 FAILED="$WORKSPACE/failed"
 IDLE="$WORKSPACE/idle"
 POLL={POLL_INTERVAL}
-MAX_SECONDS={MAX_TASK_MINUTES * 60}
-IDLE_SECONDS={IDLE_TIMEOUT_MINUTES * 60}
+# Fristen zur Laufzeit ueberschreibbar, wie das Budget. Wer sie aendern will,
+# soll dafuer nicht das Setup neu erzeugen muessen.
+MAX_SECONDS="${{CLAUDE_24X7_MAX_SECONDS:-{MAX_TASK_MINUTES * 60}}}"
+IDLE_SECONDS="${{CLAUDE_24X7_IDLE_SECONDS:-{IDLE_TIMEOUT_MINUTES * 60}}}"
 LOGFILE="/tmp/24x7-$(date +%Y%m%d).log"
+
+# Budget fuer den ganzen Lauf, nicht pro Task. Der Zaehler sieht immer nur
+# einen Strom, deshalb bekommt er vor jedem Aufruf den Rest und nicht die
+# Gesamtsumme. So erzwingt derselbe Zaehler, den Nightshift benutzt, eine
+# Grenze ueber viele Aufrufe hinweg, ohne dass die Rechnung zweimal existiert.
+BUDGET_USD="${{CLAUDE_24X7_BUDGET_USD:-{BUDGET_USD}}}"
+BUDGET_TOKENS="${{CLAUDE_24X7_BUDGET_TOKENS:-{BUDGET_TOKENS}}}"
+SUMMENDATEI="$WORKSPACE/24x7-kosten.json"
+SUMME_USD=0
+SUMME_EIN=0
+SUMME_AUS=0
+SUMME_VOLLSTAENDIG=1
+CLAUDE_PIDDATEI="/tmp/24x7-claude-$$.pid"
+RCDATEI="/tmp/24x7-rc-$$"
+STOPMARKER="/tmp/24x7-budget-stop-$$"
+BUDGET_STOP=0
+# Jeder Claude-Aufruf, auch der im Leerlauf. TASK_COUNT zaehlt nur Tasks, und
+# gerade der Leerlauf ist es, der auf einem leeren Posteingang das Geld kostet.
+AUFRUF_COUNT=0
 
 # Timeout-Kommando bestimmen. Ohne Timeout laeuft ein haengender Task
 # unbegrenzt weiter, deshalb Abbruch statt stillem Weiterlaufen.
@@ -252,8 +283,136 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 fi
 echo $$ > "$PIDFILE"
 
+# ── Kosten: messen, summieren, stoppen ──────────────────────
+# awk statt jq: der Zaehler faellt ohne jq auf "unbekannt" zurueck und laesst
+# den Lauf weiterlaufen, und dieselbe Nachsicht gilt hier. Fehlt die Zahl,
+# bleibt die Summe stehen und wird als unvollstaendig gekennzeichnet, statt
+# eine Null zu behaupten, die niemand gemessen hat.
+zahl_aus_json() {{
+    [ -f "$1" ] || return 1
+    # grep und sed statt awk mit Anfuehrungszeichen im Muster: der Generator
+    # baut diesen Text als f-String, und jede Backslash-Folge haette hier
+    # zwei Ebenen zu ueberleben. Zwei Werkzeuge ohne Escapes sind leichter
+    # richtig zu halten als ein awk-Programm, das zweimal maskiert ist.
+    ZEILE=$(grep -m1 -- "$2" "$1" 2>/dev/null) || return 1
+    WERT=$(printf '%s' "$ZEILE" | sed -e 's/.*: *//' -e 's/[",]//g' -e 's/[[:space:]]//g')
+    case "$WERT" in
+        ''|*[!0-9.-]*) return 1 ;;
+    esac
+    printf '%s' "$WERT"
+}}
+
+summe_schreiben() {{
+    # Die Datei entsteht als Here-Doc, nicht in awk. awk braeuchte hier
+    # Anfuehrungszeichen und Zeilenumbrueche als Escape-Folgen, und die
+    # muessten den f-String des Generators und die Shell heil ueberstehen.
+    USD_TXT=$(LC_ALL=C awk -v u="$SUMME_USD" 'BEGIN {{ printf("%.4f", u + 0) }}')
+    VOLL=false
+    [ "$SUMME_VOLLSTAENDIG" -eq 1 ] && VOLL=true
+    UEBER=false
+    [ "$BUDGET_STOP" -eq 1 ] && UEBER=true
+    cat > "$SUMMENDATEI" 2>/dev/null <<ENDE || true
+{{
+  "usd_geschaetzt": $USD_TXT,
+  "tokens_ein": $SUMME_EIN,
+  "tokens_aus": $SUMME_AUS,
+  "summe_vollstaendig": $VOLL,
+  "budget_usd": $BUDGET_USD,
+  "budget_ueberschritten": $UEBER,
+  "aufrufe": ${{AUFRUF_COUNT:-0}},
+  "tasks": ${{TASK_COUNT:-0}},
+  "preise_stand": "{gemeinsam.PREISE_STAND}"
+}}
+ENDE
+}}
+
+summe_addieren() {{
+    KOSTEN="$1"
+    U=$(zahl_aus_json "$KOSTEN" usd_geschaetzt) || U=""
+    if [ -z "$U" ]; then
+        SUMME_VOLLSTAENDIG=0
+    else
+        SUMME_USD=$(LC_ALL=C awk -v a="$SUMME_USD" -v b="$U" 'BEGIN {{ printf("%.6f", a + b) }}')
+        E=$(zahl_aus_json "$KOSTEN" tokens_ein) || E=0
+        A=$(zahl_aus_json "$KOSTEN" tokens_aus) || A=0
+        SUMME_EIN=$((SUMME_EIN + E))
+        SUMME_AUS=$((SUMME_AUS + A))
+    fi
+    summe_schreiben
+}}
+
+# Was vom Budget noch uebrig ist. Der Zaehler bekommt diesen Rest, nicht das
+# ganze Budget: sonst duerfte jeder einzelne Aufruf die volle Summe kosten.
+rest_usd() {{
+    LC_ALL=C awk -v b="$BUDGET_USD" -v s="$SUMME_USD" 'BEGIN {{
+        if (b + 0 <= 0) {{ print 0; exit }}
+        r = b - s
+        printf("%.4f", (r > 0 ? r : 0.0001))
+    }}'
+}}
+
+rest_tokens() {{
+    LC_ALL=C awk -v b="$BUDGET_TOKENS" -v e="$SUMME_EIN" -v a="$SUMME_AUS" 'BEGIN {{
+        if (b + 0 <= 0) {{ print 0; exit }}
+        r = b - e - a
+        printf("%d", (r > 0 ? r : 1))
+    }}'
+}}
+
+# Ein Claude-Aufruf, mitgezaehlt.
+#   $1 Datei fuer die Kostenschaetzung dieses Aufrufs
+#   $2 Frist in Sekunden
+#   $3 Prompt
+# Setzt RC auf den Rueckgabewert von claude beziehungsweise timeout.
+#
+# Der Aufbau stammt aus dem Nightshift-Runner und ist kein Selbstzweck: der
+# Rueckgabewert reist ueber eine Datei, weil das Ende der Pipeline dem Zaehler
+# gehoert und "$?" dessen Wert waere. "set -m" gibt dem timeout-Prozess eine
+# eigene Prozessgruppe, deren ID seine PID ist; nur so trifft der Budget-Stop
+# auch Enkel, egal wie timeout Signale weiterreicht.
+claude_mit_zaehler() {{
+    KOSTENDATEI="$1"
+    FRIST="$2"
+    PROMPT="$3"
+    AUFRUF_COUNT=$((AUFRUF_COUNT + 1))
+    rm -f "$RCDATEI" "$STOPMARKER" "$CLAUDE_PIDDATEI"
+    set -m
+    {{
+        set -m
+        "$TIMEOUT_BIN" "$FRIST" claude -p "$PROMPT" \
+          --dangerously-skip-permissions \
+          --output-format stream-json \
+          --verbose \
+          </dev/null 2>&1 &
+        X7_CLAUDE=$!
+        echo "$X7_CLAUDE" > "$CLAUDE_PIDDATEI"
+        set +m
+        wait "$X7_CLAUDE"
+        echo $? > "$RCDATEI"
+    }} | tee -a "$LOGFILE" \
+      | bash "$WORKSPACE/24x7-cost.sh" \
+            "$KOSTENDATEI" "$(rest_usd)" "$(rest_tokens)" \
+            "$CLAUDE_PIDDATEI" "$STOPMARKER" &
+    wait $! 2>/dev/null
+    set +m
+    RC=$(cat "$RCDATEI" 2>/dev/null || echo 1)
+    case "${{RC:-}}" in ''|*[!0-9]*) RC=1 ;; esac
+    rm -f "$CLAUDE_PIDDATEI" "$RCDATEI"
+    summe_addieren "$KOSTENDATEI"
+    if [ -f "$STOPMARKER" ]; then
+        BUDGET_STOP=1
+        summe_schreiben
+    fi
+}}
+
 # Graceful Shutdown
 cleanup() {{
+    # RC vor allem anderen: "$?" waere nach dem ersten Kommando im Rumpf
+    # dessen Wert und nicht mehr der, mit dem der Runner endet. Der alte
+    # Rumpf endete fest mit "exit 0" und machte damit aus einem Budget-Stop
+    # oder einem Isolationsabbruch ein sauberes Ende.
+    RC=${{1:-$?}}
+    trap - EXIT
     echo ""
     echo "⏹  24x7 Runner wird beendet... ($(date))" | tee -a "$LOGFILE"
     # Laufenden Task in working/ nach failed/ verschieben
@@ -264,10 +423,13 @@ cleanup() {{
         echo "ABBRUCH: Runner wurde beendet" >> "$DIR/log.md" 2>/dev/null
         mv "$DIR" "$FAILED/$TASK_NAME" 2>/dev/null
     done
-    rm -f "$PIDFILE"
-    exit 0
+    rm -f "$PIDFILE" "$CLAUDE_PIDDATEI" "$RCDATEI" "$STOPMARKER"
+    summe_schreiben
+    exit "$RC"
 }}
-trap cleanup SIGTERM SIGINT EXIT
+trap 'cleanup 143' SIGTERM
+trap 'cleanup 130' SIGINT
+trap cleanup EXIT
 
 # Ordner anlegen
 mkdir -p "$INBOX" "$WORKING" "$OUTBOX" "$FAILED" "$IDLE"
@@ -276,22 +438,25 @@ echo "============================================" | tee -a "$LOGFILE"
 echo "  Claude 24x7 Runner gestartet: $(date)" | tee -a "$LOGFILE"
 echo "  Workspace: $WORKSPACE" | tee -a "$LOGFILE"
 echo "  Poll-Intervall: ${{POLL}}s" | tee -a "$LOGFILE"
-echo "  Task-Timeout: {MAX_TASK_MINUTES} Min (via $TIMEOUT_BIN)" | tee -a "$LOGFILE"
+echo "  Task-Timeout: ${{MAX_SECONDS}}s, Leerlauf ${{IDLE_SECONDS}}s (via $TIMEOUT_BIN)" | tee -a "$LOGFILE"
 echo "  Idle: {IDLE_BEHAVIOR}" | tee -a "$LOGFILE"
 echo "  Isolation: $ISOLATION" | tee -a "$LOGFILE"
 echo "  Log: $LOGFILE" | tee -a "$LOGFILE"
 echo "  PID: $$" | tee -a "$LOGFILE"
 echo "============================================" | tee -a "$LOGFILE"
 echo "" | tee -a "$LOGFILE"
-echo "⚠️  KOSTEN-HINWEIS: 24x7 erzeugt kontinuierlich API-Calls!" | tee -a "$LOGFILE"
-echo "   Überwache dein Anthropic-Dashboard." | tee -a "$LOGFILE"
-echo "   Idle auf 'sleep' setzen wenn Kosten ein Thema sind." | tee -a "$LOGFILE"
+echo "⚠️  KOSTEN: 24x7 erzeugt kontinuierlich API-Calls." | tee -a "$LOGFILE"
+echo "   Budget fuer diesen Lauf: $BUDGET_USD USD. Danach endet der Runner mit 9." | tee -a "$LOGFILE"
+echo "   Laufende Summe: $SUMMENDATEI" | tee -a "$LOGFILE"
+echo "   Die Schaetzung ist eine Schaetzung. Das Anthropic-Dashboard bleibt massgeblich." | tee -a "$LOGFILE"
+echo "   Der Leerlauf ruft Claude auf und zaehlt mit. IDLE_BEHAVIOR=sleep schaltet ihn ab." | tee -a "$LOGFILE"
 echo "" | tee -a "$LOGFILE"
 
 # Heartbeat zurücksetzen
 > /tmp/24x7-heartbeat.log
 
 TASK_COUNT=0
+summe_schreiben
 
 while true; do
   # Finde ältesten Task-Ordner mit task.md
@@ -320,8 +485,9 @@ while true; do
     TASK_CONTENT=$(cat "$WORKING/$TASK_NAME/task.md")
 
     # Claude starten mit Timeout
+    TASK_START="$(date -Iseconds 2>/dev/null || date)"
     echo "   ▶ Claude startet..." | tee -a "$LOGFILE"
-    "$TIMEOUT_BIN" $MAX_SECONDS claude -p \\
+    claude_mit_zaehler "$WORKING/$TASK_NAME/cost.json" "$MAX_SECONDS" \\
       "Du bearbeitest folgenden Task im Ordner $WORKING/$TASK_NAME.
 
 AUFTRAG (aus task.md):
@@ -334,15 +500,19 @@ REGELN:
 - Lies $WORKSPACE/decisions.md falls vorhanden (Entscheidungen vorheriger Tasks)
 - Schreibe relevante eigene Entscheidungen an $WORKSPACE/decisions.md an (append)
 - Arbeite NUR in diesem Ordner
-- Wenn fertig: Session beenden" \\
-      --dangerously-skip-permissions \\
-      --output-format stream-json \\
-      --verbose \\
-      >> "$LOGFILE" 2>&1
+- Wenn fertig: Session beenden"
 
-    EXIT_CODE=$?
+    EXIT_CODE=$RC
 
-    if [ $EXIT_CODE -eq 0 ]; then
+    if [ "$BUDGET_STOP" -eq 1 ]; then
+      # Budget zuerst, sonst wuerde ein durch den Stop beendeter Claude als
+      # gewoehnlicher Fehler in failed/ landen und niemand saehe den Grund.
+      echo "BUDGET-STOP: Der Lauf wurde bei $BUDGET_USD USD beendet." >> "$WORKING/$TASK_NAME/log.md" 2>/dev/null
+      mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
+      echo "   💸 Budget erreicht → failed/$TASK_NAME" | tee -a "$LOGFILE"
+      echo "   Schaetzung: $SUMME_USD USD von $BUDGET_USD. Details in $SUMMENDATEI." | tee -a "$LOGFILE"
+      cleanup 9
+    elif [ $EXIT_CODE -eq 0 ]; then
       # Erfolg → outbox
       mv "$WORKING/$TASK_NAME" "$OUTBOX/$TASK_NAME"
       echo "   ✅ Erledigt → outbox/$TASK_NAME ($(date +%H:%M:%S))" | tee -a "$LOGFILE"
@@ -350,13 +520,25 @@ REGELN:
       # Timeout
       echo "TIMEOUT" > "$WORKING/$TASK_NAME/log.md"
       mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
-      echo "   ⏰ Timeout nach {MAX_TASK_MINUTES} Min → failed/$TASK_NAME" | tee -a "$LOGFILE"
+      echo "   ⏰ Timeout nach ${{MAX_SECONDS}}s → failed/$TASK_NAME" | tee -a "$LOGFILE"
     else
       # Fehler
       echo "EXIT CODE: $EXIT_CODE" >> "$WORKING/$TASK_NAME/log.md" 2>/dev/null
       mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
       echo "   ❌ Fehler (Exit $EXIT_CODE) → failed/$TASK_NAME" | tee -a "$LOGFILE"
     fi
+
+    # Receipt fuer diesen Task. Der Ordner ist inzwischen verschoben, also
+    # wird er dort gesucht, wo er gelandet ist.
+    for ORT in "$OUTBOX/$TASK_NAME" "$FAILED/$TASK_NAME"; do
+      [ -d "$ORT" ] || continue
+      NS_RUNID="$TASK_NAME" NS_START="$TASK_START" NS_EXIT="$EXIT_CODE" \\
+      NS_ISOLATION="$ISOLATION" NS_KOSTEN="$ORT/cost.json" NS_ZIEL="$ORT" \\
+      NS_GENRE="task" NS_AUFGABE="$TASK_NAME" \\
+      NS_RUNBOOK="$ORT/task.md" NS_STALL="/tmp/24x7-stall" \\
+        bash "$WORKSPACE/24x7-receipt.sh" >/dev/null 2>&1 || true
+      break
+    done
 
     echo "" | tee -a "$LOGFILE"
 
@@ -369,15 +551,24 @@ REGELN:
     cp "$IDLE/idle-tasks.md" "$IDLE_DIR/task.md" 2>/dev/null
 
     if [ -f "$IDLE_DIR/task.md" ] && ! grep -q "Session sofort beenden" "$IDLE_DIR/task.md"; then
-      "$TIMEOUT_BIN" $IDLE_SECONDS claude -p \\
+      # Der Leerlauf ruft Claude auf und kostet damit Geld. Bei
+      # IDLE_BEHAVIOR=cleanup arbeitet er bis zu {IDLE_TIMEOUT_MINUTES}
+      # Minuten und pausiert danach nur {POLL_INTERVAL} Sekunden; ein leerer
+      # Posteingang kostet also fast so viel wie ein voller. Deshalb zaehlt
+      # er gegen dasselbe Budget wie ein Task. Wer das nicht will, generiert
+      # das Setup mit IDLE_BEHAVIOR=sleep.
+      claude_mit_zaehler "$IDLE_DIR/cost.json" "$IDLE_SECONDS" \\
         "Du bist im Idle-Modus. Lies $IDLE_DIR/task.md und arbeite die Idle-Aufgaben ab.
 Ergebnisse in $IDLE_DIR/output/ ablegen.
 Workspace-Root ist $WORKSPACE.
-Wenn fertig: Session beenden." \\
-        --dangerously-skip-permissions \\
-        --output-format stream-json \\
-        --verbose \\
-        >> "$LOGFILE" 2>&1
+Wenn fertig: Session beenden."
+
+      if [ "$BUDGET_STOP" -eq 1 ]; then
+        rm -rf "$IDLE_DIR"
+        echo "   💸 Budget im Leerlauf erreicht: $SUMME_USD USD von $BUDGET_USD." | tee -a "$LOGFILE"
+        echo "   Details in $SUMMENDATEI." | tee -a "$LOGFILE"
+        cleanup 9
+      fi
 
       if [ -d "$IDLE_DIR" ] && [ "$(ls -A "$IDLE_DIR/output/" 2>/dev/null)" ]; then
         mv "$IDLE_DIR" "$OUTBOX/"
@@ -742,6 +933,8 @@ if __name__ == "__main__":
         "CLAUDE.md": CLAUDE_MD,
         ".claude/settings.json": json.dumps(SETTINGS, indent=2, ensure_ascii=False),
         "runner.sh": RUNNER_SH,
+        "24x7-cost.sh": COST_SH,
+        "24x7-receipt.sh": RECEIPT_SH,
         "runner-bg.sh": RUNNER_BG_SH,
         "watchdog.sh": WATCHDOG_SH,
         "24x7-docker.sh": DOCKER_SH,

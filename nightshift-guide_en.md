@@ -222,7 +222,13 @@ In a second terminal:
 ```bash
 ./nightshift-watchdog.sh          # Alert after 10 min without heartbeat
 ./nightshift-watchdog.sh 300      # Alert after 5 min
+
+# React instead of only reporting:
+NIGHTSHIFT_WATCHDOG_AKTION=beenden ./nightshift-watchdog.sh 600
+NIGHTSHIFT_WATCHDOG_AKTION=neustart ./nightshift-watchdog.sh 600
 ```
+
+`beenden` sends TERM to the run and KILL 20 seconds later. `neustart` does the same and then starts the run again, once by default (`NIGHTSHIFT_WATCHDOG_NEUSTARTS`). Only a run the watchdog just terminated itself gets restarted: a run that ended on its own has no live PID any more, and a budget stop looks exactly like that. What the watchdog does not see is a loop in which Claude runs the same failing test over and over, because the heartbeat stays green through it.
 
 ---
 

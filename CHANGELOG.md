@@ -65,6 +65,20 @@ are in both.
   `CLAUDE_24X7_WORKSPACE` and falls back to the generated path. The container
   sets it to `/workspace`, and the path barrier of the hook reads the same
   variable, so both agree on where the workspace is.
+- A restart policy in both watchdogs. `NIGHTSHIFT_WATCHDOG_AKTION` and
+  `CLAUDE_24X7_WATCHDOG_AKTION` take `melden` (the old behaviour and still the
+  default), `beenden` (TERM to the PID in the PID file, KILL after
+  `..._WATCHDOG_FRIST` seconds, then the watchdog exits) or `neustart` (the
+  same, then start the run again, at most `..._WATCHDOG_NEUSTARTS` times).
+  TERM before KILL because both runners trap it: Nightshift ends Claude's
+  process group, 24x7 moves the running task to `failed/`.
+  A run that ended on its own is never restarted. The watchdog restarts only
+  what it just terminated itself and recognises that by a live PID, so a
+  budget stop cannot be undone by a restart, and neither can a crash or a
+  finished run. The roadmap asked for exactly that guarantee; it now follows
+  from the order of operations instead of from a second mechanism.
+  `..._PIDDATEI` and `..._HEARTBEAT` make both paths overridable, which is
+  what allows the reaction to be driven in CI without touching a real run.
 
 - `Dockerfile` and `docker-compose.yml` in the generated Nightshift setup,
   plus `nightshift-docker.sh` to build and run it. The container mounts the
@@ -106,6 +120,11 @@ are in both.
   on 2026-09-04.
 
 ### Changed
+
+- The watchdog counts a zombie as ended. `kill -0` answers yes for a process
+  that has exited but not been reaped, so a crashed run whose parent never
+  collected it looked alive and the watchdog would never have acted. It now
+  asks `ps -o state=` as well; without `ps` the old behaviour stands.
 
 - The 24x7 seatbelt profile is the fixed one. It carried the old
   deny-by-default read rules, under which nothing starts on current macOS

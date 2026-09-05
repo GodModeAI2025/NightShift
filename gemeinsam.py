@@ -550,3 +550,107 @@ _SANDBOX_SB = """(version 1)
 
 def sandbox_profil(werte):
     return _fuellen(_SANDBOX_SB, werte)
+
+
+# ════════════════════════════════════════════════════════════
+#  Watchdog: erkennen war die eine Haelfte, reagieren die andere
+# ════════════════════════════════════════════════════════════
+# Bis Welle 6 hat der Watchdog einen Stillstand erkannt und dann nichts
+# getan: eine Zeile auf stdout und eine Notification, die nachts niemand
+# sieht. Die Reaktion steht jetzt hier, einmal fuer beide Runner.
+#
+# Die Regel, die den Neustart sicher macht, ist die Reihenfolge: neu
+# gestartet wird nur ein Lauf, den der Watchdog gerade selbst beendet hat.
+# Ein Lauf, der von allein zu Ende ist, hat keine lebende PID mehr, und
+# damit ist auch der Budget-Stop abgedeckt: der beendet den Lauf, also
+# findet der Watchdog danach nichts mehr zum Neustarten.
+_WATCHDOG_REAKTION = """
+# ── Reaktion auf Stillstand ─────────────────────────────────
+# melden    nur Meldung und Notification (Voreinstellung)
+# beenden   Lauf beenden und selbst aussteigen
+# neustart  Lauf beenden und neu starten, hoechstens @@NEUSTARTVAR@@ mal
+AKTION="${@@AKTIONVAR@@:-melden}"
+NEUSTARTS="${@@NEUSTARTVAR@@:-1}"
+FRIST="${@@FRISTVAR@@:-20}"
+PIDDATEI="${@@PIDVAR@@:-@@PIDDATEI@@}"
+
+prozess_lebt() {
+    kill -0 "$1" 2>/dev/null || return 1
+    # Ein Zombie ist beendet, nur noch nicht abgeholt: sein Elternprozess
+    # hat den Rueckgabewert nicht gelesen. "kill -0" sagt bei ihm trotzdem
+    # ja, und ohne diese Abfrage haelt der Watchdog einen abgestuerzten Lauf
+    # fuer lebendig und ruehrt sich nie wieder. Fehlt ps, bleibt es beim
+    # alten Verhalten.
+    ZUSTAND=$(ps -o state= -p "$1" 2>/dev/null | tr -d ' ')
+    case "$ZUSTAND" in Z*) return 1 ;; esac
+    return 0
+}
+
+lauf_pid() {
+    [ -f "$PIDDATEI" ] || return 1
+    PID=$(cat "$PIDDATEI" 2>/dev/null)
+    case "${PID:-}" in ''|*[!0-9]*) return 1 ;; esac
+    prozess_lebt "$PID" || return 1
+    printf '%s' "$PID"
+}
+
+lauf_beenden() {
+    # Erst TERM: der Runner hat einen Trap darauf und beendet Claude
+    # geordnet. Erst wenn er die Frist verstreichen laesst, kommt KILL.
+    kill -TERM "$1" 2>/dev/null
+    WARTE=0
+    while [ "$WARTE" -lt "$FRIST" ]; do
+        prozess_lebt "$1" || return 0
+        sleep 1
+        WARTE=$((WARTE + 1))
+    done
+    kill -KILL "$1" 2>/dev/null
+    sleep 1
+    prozess_lebt "$1" && return 1
+    return 0
+}
+
+stillstand_behandeln() {
+    case "$AKTION" in
+        beenden|neustart) ;;
+        *) return 0 ;;
+    esac
+
+    PID=$(lauf_pid) || {
+        echo "   Kein laufender @@MARKE@@-Prozess in $PIDDATEI."
+        echo "   Der Lauf ist schon zu Ende, hier wird nichts neu gestartet."
+        echo "   Ein Budget-Stop sieht genau so aus, und das ist Absicht."
+        return 0
+    }
+
+    echo "   Beende PID $PID (TERM, nach ${FRIST}s KILL)..."
+    if lauf_beenden "$PID"; then
+        echo "   Beendet."
+    else
+        echo "   PID $PID laesst sich nicht beenden, von Hand nachsehen."
+        return 0
+    fi
+    rm -f "$PIDDATEI"
+
+    if [ "$AKTION" = "beenden" ]; then
+        echo "   Aktion 'beenden': der Watchdog steigt hier aus."
+        exit 0
+    fi
+
+    if [ "$NEUSTARTS" -le 0 ]; then
+        echo "   Neustartbudget aufgebraucht, der Watchdog steigt hier aus."
+        exit 0
+    fi
+    NEUSTARTS=$((NEUSTARTS - 1))
+    echo "   Neustart, danach noch $NEUSTARTS uebrig."
+    ( cd "$(dirname "$0")" && bash ./@@STARTSKRIPT@@ ) || \\
+        echo "   Neustart fehlgeschlagen."
+    # Ohne das faende der naechste Durchlauf denselben alten Zeitstempel
+    # und wuerde sofort wieder zuschlagen.
+    touch "$HEARTBEAT" 2>/dev/null || true
+}
+"""
+
+
+def watchdog_reaktion(werte):
+    return _fuellen(_WATCHDOG_REAKTION, werte)

@@ -272,7 +272,12 @@ Stop:     kill 12345
 
 ```bash
 ./watchdog.sh
+
+# React instead of only reporting:
+CLAUDE_24X7_WATCHDOG_AKTION=neustart ./watchdog.sh
 ```
+
+`beenden` sends TERM to the runner and KILL 20 seconds later, `neustart` starts it again afterwards, once by default. The task it was working on lands in `failed/`, which the runner's trap takes care of. Only a runner the watchdog terminated itself gets restarted.
 
 Shows live status every 60 seconds:
 ```

@@ -43,6 +43,12 @@ jobs:
       - name: Isolation beider Setups pruefen
         run: python -m unittest discover -s tests -p 'test_isolation.py' -v
 
+      # Die drei Aktionen des Watchdogs gegen einen Scheinlauf: melden,
+      # beenden, neustart. Kein Claude im Spiel, der Scheinlauf ist ein
+      # sleep und der Neustart ein Skript, das eine Spur hinterlaesst.
+      - name: Reaktion des Watchdogs pruefen
+        run: python -m unittest discover -s tests -p 'test_watchdog.py' -v
+
       # Kostenzaehler und Receipt laufen gegen einen claude-Stub, es
       # entsteht kein API-Aufruf und keine Rechnung.
       - name: Kostenbudget und Morning Receipt pruefen

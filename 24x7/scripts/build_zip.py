@@ -415,12 +415,23 @@ echo "  mkdir -p {WORKSPACE}/inbox/mein-task/materials"
 echo "  nano {WORKSPACE}/inbox/mein-task/task.md"
 """
 
+_WATCHDOG = dict(
+    _NAMEN,
+    MARKE="24x7",
+    AKTIONVAR="CLAUDE_24X7_WATCHDOG_AKTION",
+    NEUSTARTVAR="CLAUDE_24X7_WATCHDOG_NEUSTARTS",
+    FRISTVAR="CLAUDE_24X7_WATCHDOG_FRIST",
+    PIDVAR="CLAUDE_24X7_PIDDATEI",
+    PIDDATEI="/tmp/24x7.pid",
+    STARTSKRIPT="runner-bg.sh",
+)
+
 WATCHDOG_SH = f"""#!/bin/bash
 TIMEOUT=${{1:-{MAX_TASK_MINUTES * 60 + 120}}}
-HEARTBEAT="/tmp/24x7-heartbeat.log"
-LOGFILE="/tmp/24x7-$(date +%Y%m%d).log"
-
-echo "🔍 24x7 Watchdog aktiv (Timeout: ${{TIMEOUT}}s)"
+HEARTBEAT="${{CLAUDE_24X7_HEARTBEAT:-/tmp/24x7-heartbeat.log}}"
+WORKSPACE="${{CLAUDE_24X7_WORKSPACE:-{WORKSPACE}}}"
+@@REAKTION@@
+echo "🔍 24x7 Watchdog aktiv (Timeout: ${{TIMEOUT}}s, Aktion: $AKTION)"
 echo ""
 
 while true; do
@@ -440,21 +451,24 @@ while true; do
   DIFF=$((NOW - LAST))
 
   # Status
-  INBOX_COUNT=$(find "{WORKSPACE}/inbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  WORKING_COUNT=$(find "{WORKSPACE}/working" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  DONE_COUNT=$(find "{WORKSPACE}/outbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  FAILED_COUNT=$(find "{WORKSPACE}/failed" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  INBOX_COUNT=$(find "$WORKSPACE/inbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  WORKING_COUNT=$(find "$WORKSPACE/working" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  DONE_COUNT=$(find "$WORKSPACE/outbox" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  FAILED_COUNT=$(find "$WORKSPACE/failed" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
 
   if [ $DIFF -gt $TIMEOUT ]; then
     echo "⚠️  $(date +%H:%M:%S): KEIN HEARTBEAT seit ${{DIFF}}s!"
-    osascript -e 'display notification "Claude 24x7 hängt!" with title "24x7 Watchdog"' 2>/dev/null || true
+    osascript -e 'display notification "Claude 24x7 haengt!" with title "24x7 Watchdog"' 2>/dev/null || true
+    stillstand_behandeln
   else
     echo "✅ $(date +%H:%M:%S): OK (${{DIFF}}s) | 📥$INBOX_COUNT 🔄$WORKING_COUNT ✅$DONE_COUNT ❌$FAILED_COUNT"
   fi
 
   sleep 60
 done
-"""
+""".replace(
+    "@@REAKTION@@", gemeinsam.watchdog_reaktion(_WATCHDOG)
+)
 
 SANDBOX_SB = gemeinsam.sandbox_profil(_NAMEN)
 
@@ -565,6 +579,46 @@ pkill -f "runner.sh"
 # or
 kill $(cat /tmp/24x7.pid 2>/dev/null)
 ```
+
+## Watchdog
+
+```bash
+./watchdog.sh                       # Alert after the task timeout plus two minutes without heartbeat
+./watchdog.sh 300                   # Alert after 5 min
+```
+
+Detecting a stall was always there. Reacting to one is what the three actions
+add. Set `CLAUDE_24X7_WATCHDOG_AKTION`:
+
+| Action | What happens on a stall |
+|---|---|
+| `melden` (default) | One line on stdout and a macOS notification. Nothing is stopped. |
+| `beenden` | `TERM` to the PID in `/tmp/24x7.pid`, `KILL` after `CLAUDE_24X7_WATCHDOG_FRIST` seconds (default 20), then the watchdog exits. |
+| `neustart` | The same, and then the run is started again, at most `CLAUDE_24X7_WATCHDOG_NEUSTARTS` times (default 1). |
+
+```bash
+CLAUDE_24X7_WATCHDOG_AKTION=neustart ./watchdog.sh 600
+```
+
+**A run that ended on its own is never restarted.** The watchdog only restarts
+what it just terminated itself, and it recognises that by a live PID in
+`/tmp/24x7.pid`. A budget stop ends the run, so afterwards there is no live PID
+and the watchdog reports instead of restarting. Same for a crash and for a
+finished run. A restart begins with an empty `working/`: the runner moves the task it was on to `failed/` while shutting down, and picks the next one from `inbox/`.
+
+**What the watchdog does not cover:**
+
+- **A busy loop.** The heartbeat comes from the `PostToolUse` hook. Claude
+  retrying the same failing test forever keeps writing heartbeats, and to the
+  watchdog that looks healthy. The task timeout is the backstop there, not the watchdog.
+- **A run in the container.** `/tmp` inside the container is a tmpfs of its
+  own, so the heartbeat never reaches the host and a watchdog started there
+  waits forever. Read `docker compose logs -f 24x7` instead.
+- **The reason for the stall.** It restarts, it does not diagnose. If the run
+  hangs on the same step every time, the restart budget runs out and the
+  watchdog exits.
+- **Being started at all.** It is a separate script in a second terminal, and
+  nothing starts it for you.
 
 ## Isolation
 

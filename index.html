@@ -1028,7 +1028,7 @@
       <div class="security-layer">
         <div class="num">4</div>
         <h4>Watchdog</h4>
-        <p>Heartbeat monitor detects when Claude stalls. macOS notification or custom alerting.</p>
+        <p>Heartbeat monitor detects when Claude stalls, and can terminate or restart the run instead of only reporting it.</p>
       </div>
     </div>
   </div>
@@ -1069,8 +1069,8 @@
     </div>
 
     <div class="layer-detail">
-      <h4><span class="badge">Layer 4</span> Watchdog — Liveness Monitoring</h4>
-      <p>A separate script that checks the heartbeat log. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm. On macOS, this is a system notification. You can extend it with your own alerting (Slack webhook, email, etc.).</p>
+      <h4><span class="badge">Layer 4</span> Watchdog — Liveness Monitoring and Restart</h4>
+      <p>A separate script that checks the heartbeat log. If Claude hasn't written a heartbeat in N minutes (default: 10), it acts. Three actions: <code>melden</code> reports and is the default, <code>beenden</code> sends TERM to the run and KILL after a grace period, <code>neustart</code> does that and starts the run again, up to a restart budget. A run that ended on its own is never restarted: the watchdog only restarts what it just terminated itself, and a budget stop looks exactly like a run that ended. What stays uncovered is a busy loop, because a Claude retrying the same failing test keeps writing heartbeats, and a run inside the container, whose heartbeat lands in its own tmpfs.</p>
     </div>
 
     <div class="layer-detail" style="border-color: var(--accent-amber);">

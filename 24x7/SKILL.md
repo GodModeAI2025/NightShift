@@ -122,7 +122,7 @@ python3 ~/build_24x7.py
 | 24x7-docker.sh | Builds the container and starts the runner in it. `--logs` follows the log. |
 | Dockerfile | Two targets: runner (Claude Code) and egress (allowlist proxy) |
 | docker-compose.yml | Workspace at /workspace, internal network, read-only root, all capabilities dropped |
-| watchdog.sh | Heartbeat monitor with live status: 📥inbox 🔄working ✅done ❌failed. Only for a run on the host: in the container the heartbeat lands in its own tmpfs. |
+| watchdog.sh | Heartbeat monitor with live status: 📥inbox 🔄working ✅done ❌failed. CLAUDE_24X7_WATCHDOG_AKTION picks the reaction: melden (default), beenden, neustart. Only for a run on the host: in the container the heartbeat lands in its own tmpfs. |
 | sandbox.sb | macOS sandbox profile: restricts writes to workspace + /tmp. Reads outside the workspace and outbound traffic on 443 stay open. |
 | .claude/settings.json | Hooks: PreToolUse (security), PostToolUse (heartbeat) |
 | CLAUDE.md | Workspace rules: isolation, autonomy zones, error tolerance, workspace memory |

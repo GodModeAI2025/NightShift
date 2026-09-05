@@ -58,8 +58,8 @@ The `sandbox-exec` profile stays as the macOS option. It restricts writes at the
 **Layer 3b: Cost Governor (Nightshift)**
 `nightshift-cost.sh` reads Claude's `stream-json` output, adds up the `usage` fields per model and estimates the dollar figure from a dated price table. When the estimate passes the budget, it terminates Claude's whole process group — a grandchild that outlived the parent used to keep the pipe open and the run hanging — and the run ends with exit code 9. Without `jq`, and equally when the stream carries no `usage` events at all, it measures nothing, says `unbekannt` and lets the run continue — a broken counter must not kill a working night, and it must not report a zero it never measured.
 
-**Layer 4: Watchdog (Liveness Monitoring)**
-A separate script that checks the heartbeat file. If Claude hasn't written a heartbeat in N minutes (default: 10), it raises an alarm — either a macOS notification or a message you can hook into your own alerting system.
+**Layer 4: Watchdog (Liveness Monitoring and Restart)**
+A separate script that checks the heartbeat file. If Claude hasn't written a heartbeat in N minutes (default: 10), it acts. Which action is `NIGHTSHIFT_WATCHDOG_AKTION` (`CLAUDE_24X7_WATCHDOG_AKTION` for 24x7): `melden` reports and is the default, `beenden` terminates the run, `neustart` terminates it and starts it again. A run that ended on its own is never restarted, because the watchdog only restarts what it just terminated itself. See [The Restart Policy](#the-restart-policy).
 
 ### Why Fresh Sessions Matter (24x7 Design)
 
@@ -599,6 +599,58 @@ This works well for 10-20 step runbooks. For very long tasks (30+ steps), split 
 
 24x7 avoids the problem entirely by using fresh sessions per task.
 
+### The Restart Policy
+
+The watchdog used to detect a stall and then do nothing about it: one line on
+stdout and a macOS notification that nobody sees at three in the morning. It
+still detects the same thing, but what it does with it is now a choice.
+
+| `NIGHTSHIFT_WATCHDOG_AKTION` | On a stall |
+|---|---|
+| `melden` (default) | Report and keep watching. The old behaviour. |
+| `beenden` | `TERM` to the PID in `/tmp/nightshift.pid`, `KILL` after `NIGHTSHIFT_WATCHDOG_FRIST` seconds (default 20), then the watchdog exits. |
+| `neustart` | The same, then start the run again, at most `NIGHTSHIFT_WATCHDOG_NEUSTARTS` times (default 1). |
+
+24x7 has the same three under `CLAUDE_24X7_WATCHDOG_AKTION`.
+
+`TERM` before `KILL` is not politeness. Both runners trap `TERM` and use it to
+shut down: Nightshift ends Claude's process group, 24x7 moves the task it was
+working on to `failed/` and writes a note. A watchdog that went straight to
+`KILL` would leave a task stuck in `working/` forever.
+
+**A run that ended on its own is never restarted.** That is the whole safety
+rule, and it comes from the order of operations rather than from a list of
+exceptions: the watchdog restarts only what it just terminated itself, and it
+recognises that by a live PID in the PID file. A budget stop terminates the
+run, so afterwards there is no live PID, and the watchdog reports instead of
+restarting. A crash and a finished run look the same to it. The roadmap asked
+for a restart that stays blocked after a budget stop; this is that, without a
+second mechanism that could disagree with the first.
+
+**What the watchdog does not cover:**
+
+- **A busy loop.** The heartbeat comes from the `PostToolUse` hook. Claude
+  retrying the same failing test forever keeps writing heartbeats, and to the
+  watchdog that looks perfectly healthy. The `Stop` hook's stall detector is
+  the answer to that case, and it writes text into Claude's context rather
+  than stopping anything.
+- **A run in the container.** `/tmp` in the container is a tmpfs of its own,
+  so the heartbeat never reaches the host and a watchdog started there waits
+  forever for a file that will not appear. `docker compose logs -f` is what
+  you watch instead. This is the reason a host-side restart policy is not the
+  right shape for the default path: `docker compose` restart policies are.
+- **The reason for the stall.** It restarts, it does not diagnose. A run that
+  hangs on the same step every time burns the restart budget and then stops.
+- **Being started at all.** It is a separate script in a second terminal, and
+  nothing starts it for you.
+
+Measured in CI against a stand-in run, for both skills: `melden` leaves the
+process alive, `beenden` ends it and exits 0, `neustart` ends it and starts the
+run script again, a restart budget of 0 ends it without a restart, an already
+dead run is reported and not restarted, an unknown action behaves like
+`melden`, and the terminated process really receives `TERM` before `KILL`. See
+[tests/test_watchdog.py](tests/test_watchdog.py).
+
 ### Graceful Shutdown
 
 Both runners handle SIGTERM and SIGINT (Ctrl+C) gracefully. On 24x7, an in-progress task is moved to `failed/` with a note. The PID file is cleaned up.
@@ -663,7 +715,6 @@ Ordered by what blocks users today. No dates attached, this is a private project
 **After that**
 
 - **SpecForge tasks.md as a runbook source.** See [Related Projects](#related-projects). The validation checks German section headings and the three zones, so this needs a converter, not a new entry in the genre table.
-- **A restart policy.** The watchdog reports and never restarts. A restart after a budget stop must stay blocked.
 
 **Done in the meantime**
 
@@ -671,10 +722,12 @@ Ordered by what blocks users today. No dates attached, this is a private project
 - A cost governor that measures first and then stops, with the tokens in the receipt.
 - A morning receipt as JSON and Markdown, written from the exit trap so a crashed run has one too.
 - A second `PreToolUse` matcher for `Write`, `Edit`, `MultiEdit` and `NotebookEdit` that measures the target path instead of a command string. Both skills, one implementation in `gemeinsam.py`.
+- Container isolation for 24x7, from the same templates as Nightshift's, with the runner refusing to start unfenced.
+- A restart policy in both watchdogs. A restart after a budget stop stays blocked, because the watchdog only restarts a run it terminated itself.
 
 **Test coverage**
 
-CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, drives the path guard against a table of write targets inside and outside the project, unpacks the release artifact and runs the generator from that location, validates the generated `docker-compose.yml` of both skills, runs `nightshift-run.sh` and `runner.sh` against a Claude stub for the isolation check, `nightshift-run.sh` for the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, drives the path guard against a table of write targets inside and outside the project, unpacks the release artifact and runs the generator from that location, drives the three watchdog actions against a stand-in run, validates the generated `docker-compose.yml` of both skills, runs `nightshift-run.sh` and `runner.sh` against a Claude stub for the isolation check, `nightshift-run.sh` for the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
 ## Related Projects
 

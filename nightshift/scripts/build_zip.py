@@ -637,15 +637,24 @@ echo "Watchdog: ./nightshift-watchdog.sh"
 echo "Beenden:  kill $PID"
 """
 
+_WATCHDOG = {
+    "MARKE": "Nightshift",
+    "AKTIONVAR": "NIGHTSHIFT_WATCHDOG_AKTION",
+    "NEUSTARTVAR": "NIGHTSHIFT_WATCHDOG_NEUSTARTS",
+    "FRISTVAR": "NIGHTSHIFT_WATCHDOG_FRIST",
+    "PIDVAR": "NIGHTSHIFT_PIDDATEI",
+    "PIDDATEI": "/tmp/nightshift.pid",
+    "STARTSKRIPT": "nightshift-run-bg.sh",
+}
+
 WATCHDOG_SH = """#!/bin/bash
 TIMEOUT=${1:-600}
-
-echo "🔍 Nightshift Watchdog aktiv (Timeout: ${TIMEOUT}s)"
+HEARTBEAT="${NIGHTSHIFT_HEARTBEAT:-/tmp/nightshift-heartbeat.log}"
+@@REAKTION@@
+echo "🔍 Nightshift Watchdog aktiv (Timeout: ${TIMEOUT}s, Aktion: $AKTION)"
 echo ""
 
 while true; do
-  HEARTBEAT="/tmp/nightshift-heartbeat.log"
-
   if [ ! -f "$HEARTBEAT" ]; then
     echo "⏳ $(date +%H:%M:%S): Warte auf Heartbeat..."
     sleep 10
@@ -664,13 +673,14 @@ while true; do
   if [ $DIFF -gt $TIMEOUT ]; then
     echo "⚠️  $(date +%H:%M:%S): KEIN HEARTBEAT seit ${DIFF}s!"
     osascript -e 'display notification "Claude haengt!" with title "Nightshift"' 2>/dev/null || true
+    stillstand_behandeln
   else
     echo "✅ $(date +%H:%M:%S): OK (${DIFF}s)"
   fi
 
   sleep 60
 done
-"""
+""".replace("@@REAKTION@@", gemeinsam.watchdog_reaktion(_WATCHDOG))
 
 SANDBOX_SB = gemeinsam.sandbox_profil(
     dict(
@@ -1307,9 +1317,42 @@ mv .claude/settings.merged.json .claude/settings.json
 ## Watchdog
 
 ```bash
-./nightshift-watchdog.sh        # Alert after 10 min without heartbeat
-./nightshift-watchdog.sh 300    # Alert after 5 min
+./nightshift-watchdog.sh                       # Alert after 10 min without heartbeat
+./nightshift-watchdog.sh 300                   # Alert after 5 min
 ```
+
+Detecting a stall was always there. Reacting to one is what the three actions
+add. Set `NIGHTSHIFT_WATCHDOG_AKTION`:
+
+| Action | What happens on a stall |
+|---|---|
+| `melden` (default) | One line on stdout and a macOS notification. Nothing is stopped. |
+| `beenden` | `TERM` to the PID in `/tmp/nightshift.pid`, `KILL` after `NIGHTSHIFT_WATCHDOG_FRIST` seconds (default 20), then the watchdog exits. |
+| `neustart` | The same, and then the run is started again, at most `NIGHTSHIFT_WATCHDOG_NEUSTARTS` times (default 1). |
+
+```bash
+NIGHTSHIFT_WATCHDOG_AKTION=neustart ./nightshift-watchdog.sh 600
+```
+
+**A run that ended on its own is never restarted.** The watchdog only restarts
+what it just terminated itself, and it recognises that by a live PID in
+`/tmp/nightshift.pid`. A budget stop ends the run, so afterwards there is no live PID
+and the watchdog reports instead of restarting. Same for a crash and for a
+finished run. A restart picks the runbook back up at the first unchecked item; that is what the runbook is for.
+
+**What the watchdog does not cover:**
+
+- **A busy loop.** The heartbeat comes from the `PostToolUse` hook. Claude
+  retrying the same failing test forever keeps writing heartbeats, and to the
+  watchdog that looks healthy. The `Stop` hook has a stall detector for that case, and it writes text into Claude's context rather than stopping anything.
+- **A run in the container.** `/tmp` inside the container is a tmpfs of its
+  own, so the heartbeat never reaches the host and a watchdog started there
+  waits forever. Read `docker compose logs -f nightshift` instead.
+- **The reason for the stall.** It restarts, it does not diagnose. If the run
+  hangs on the same step every time, the restart budget runs out and the
+  watchdog exits.
+- **Being started at all.** It is a separate script in a second terminal, and
+  nothing starts it for you.
 
 ## Emergency
 

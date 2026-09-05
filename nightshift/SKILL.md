@@ -152,7 +152,7 @@ The ZIP contains:
 | docker-compose.yml | Project as the only host mount, internal network, read-only root, dropped capabilities |
 | nightshift-cost.sh | Counts tokens from the stream-json output, estimates the cost, stops the run at the budget |
 | nightshift-receipt.sh | Writes receipt.json and receipt.md per run, also after a crash |
-| nightshift-watchdog.sh | Heartbeat monitor with macOS notification support |
+| nightshift-watchdog.sh | Heartbeat monitor. NIGHTSHIFT_WATCHDOG_AKTION picks the reaction: melden (default), beenden, neustart. |
 | nightshift-sandbox.sb | macOS sandbox profile: restricts writes to project + /tmp. Reads outside the project and outbound traffic on 443 stay open. |
 | CLAUDE-nightshift.md | Append to CLAUDE.md for project conventions + run memory |
 | README-nightshift.md | Full installation and usage guide |

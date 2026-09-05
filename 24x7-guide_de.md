@@ -244,7 +244,12 @@ chmod +x *.sh
 
 ```bash
 ./watchdog.sh
+
+# Nicht nur melden, sondern reagieren:
+CLAUDE_24X7_WATCHDOG_AKTION=neustart ./watchdog.sh
 ```
+
+`beenden` schickt dem Runner TERM und nach 20 Sekunden KILL, `neustart` startet ihn danach wieder, standardmaessig einmal. Der laufende Task landet dabei in `failed/`, dafuer sorgt der Trap im Runner. Neu gestartet wird nur ein Runner, den der Watchdog selbst beendet hat.
 
 Zeigt alle 60 Sekunden den Status:
 ```

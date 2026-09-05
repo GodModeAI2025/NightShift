@@ -222,7 +222,13 @@ Im zweiten Terminal:
 ```bash
 ./nightshift-watchdog.sh          # Alarm nach 10 Min ohne Heartbeat
 ./nightshift-watchdog.sh 300      # Alarm nach 5 Min
+
+# Nicht nur melden, sondern reagieren:
+NIGHTSHIFT_WATCHDOG_AKTION=beenden ./nightshift-watchdog.sh 600
+NIGHTSHIFT_WATCHDOG_AKTION=neustart ./nightshift-watchdog.sh 600
 ```
+
+`beenden` schickt dem Lauf TERM und nach 20 Sekunden KILL. `neustart` macht dasselbe und startet danach neu, standardmaessig genau einmal (`NIGHTSHIFT_WATCHDOG_NEUSTARTS`). Neu gestartet wird nur ein Lauf, den der Watchdog gerade selbst beendet hat: ein Lauf, der von allein zu Ende ist, hat keine lebende PID mehr, und ein Budget-Stop sieht genau so aus. Was der Watchdog nicht sieht: eine Schleife, in der Claude denselben Test wieder und wieder laufen laesst. Der Heartbeat bleibt dabei gruen.
 
 ---
 

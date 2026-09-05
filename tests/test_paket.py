@@ -26,13 +26,21 @@ ARTEFAKTE = {
         "nightshift/SKILL.md",
         "nightshift/VERSION",
         "nightshift/scripts/build_zip.py",
+        "nightshift/scripts/gemeinsam.py",
     },
     "24x7.skill": {
         "24x7/LICENSE",
         "24x7/SKILL.md",
         "24x7/VERSION",
         "24x7/scripts/build_zip.py",
+        "24x7/scripts/gemeinsam.py",
     },
+}
+
+# Womit ein entpackter Skill aufgerufen wird: Pflichtvariable und Zielpfad.
+ENTPACKT = {
+    "nightshift.skill": ("NIGHTSHIFT_PROJECT", "/tmp/paket-nightshift", "NIGHTSHIFT_OUT"),
+    "24x7.skill": ("CLAUDE_24X7_WORKSPACE", "/tmp/paket-24x7", "CLAUDE_24X7_OUT"),
 }
 
 # Repo-Innereien, die niemals mitgeliefert werden duerfen. Geprueft wird auf
@@ -210,6 +218,43 @@ class PaketTest(unittest.TestCase):
             gefunden,
             "nicht jedes Artefakt ist in der Doku verlinkt",
         )
+
+    def test_entpackter_skill_laeuft_an_seinem_installationsort(self):
+        # Der Generator holt die Schutzschicht aus gemeinsam.py. Im Repo liegt
+        # die Datei im Wurzelverzeichnis, im Artefakt neben build_zip.py. Ein
+        # Lauf aus dem Repo beweist deshalb nichts ueber die Installation:
+        # dieser Test entpackt das Archiv wie der dokumentierte Befehl und
+        # ruft den Generator genau von dort auf.
+        for artefakt, (variable, wert, ausgabe) in ENTPACKT.items():
+            skill = artefakt[: -len(".skill")]
+            ziel = tempfile.mkdtemp(prefix="nightshift-installiert-")
+            try:
+                with zipfile.ZipFile(self.pfad(artefakt)) as archiv:
+                    archiv.extractall(ziel)
+                skript = os.path.join(ziel, skill, "scripts", "build_zip.py")
+                self.assertTrue(os.path.isfile(skript), skript)
+                umgebung = dict(os.environ)
+                umgebung[variable] = wert
+                umgebung[ausgabe] = os.path.join(ziel, "setup.zip")
+                lauf = subprocess.run(
+                    [sys.executable, skript],
+                    env=umgebung,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                )
+                meldung = lauf.stdout.decode("utf-8", "replace")
+                self.assertEqual(0, lauf.returncode, "%s: %s" % (artefakt, meldung))
+                self.assertTrue(
+                    os.path.isfile(umgebung[ausgabe]),
+                    "%s: keine ZIP geschrieben:\n%s" % (artefakt, meldung),
+                )
+                # Kein Bytecode neben dem installierten Skill.
+                self.assertFalse(
+                    os.path.isdir(os.path.join(ziel, skill, "scripts", "__pycache__")),
+                    "%s legt ein __pycache__ im Skillordner ab" % artefakt,
+                )
+            finally:
+                shutil.rmtree(ziel, ignore_errors=True)
 
     def test_skript_meldet_die_pruefsummen(self):
         for artefakt in ARTEFAKTE:

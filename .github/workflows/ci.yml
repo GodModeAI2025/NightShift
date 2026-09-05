@@ -21,13 +21,20 @@ jobs:
           python-version: '3.9'
 
       - name: Skripte unter Python 3.9 kompilieren
-        run: python -m py_compile nightshift/scripts/build_zip.py 24x7/scripts/build_zip.py scripts/build_release.py
+        run: python -m py_compile gemeinsam.py nightshift/scripts/build_zip.py 24x7/scripts/build_zip.py scripts/build_release.py
 
       - name: Generatoren ausfuehren und ZIP-Inhalt pruefen
         run: python -m unittest discover -s tests -p 'test_generatoren.py' -v
 
       - name: Blockmuster des PreToolUse-Hooks pruefen
         run: python -m unittest discover -s tests -p 'test_block_muster.py' -v
+
+      # Die zweite Schranke: Write, Edit und NotebookEdit werden am Zielpfad
+      # gemessen, nicht am Kommandotext. Die Tabelle faehrt echte
+      # Werkzeugaufrufe durch das Hook-Kommando aus der generierten
+      # settings.json.
+      - name: Pfadschranke des PreToolUse-Hooks pruefen
+        run: python -m unittest discover -s tests -p 'test_pfad_schranke.py' -v
 
       # Prueft das erzeugte Dockerfile und die Compose-Datei und laesst den
       # Runner ohne Isolation gegen einen Stub laufen: er muss abbrechen.

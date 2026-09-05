@@ -7,6 +7,24 @@ Erzeugt alle Dateien und packt sie als nightshift-setup.zip
 import json, os, re, sys, zipfile
 from datetime import datetime
 
+# Die Schutzschicht steht in gemeinsam.py, damit beide Skills dieselbe haben
+# und nicht zwei Kopien auseinanderlaufen. Im Repo liegt die Datei im
+# Wurzelverzeichnis, im installierten Skill neben diesem Skript; gesucht wird
+# an beiden Stellen. Bytecode wird nicht geschrieben, sonst legt der Skill
+# beim ersten Lauf ein __pycache__ in ~/.claude/skills ab.
+sys.dont_write_bytecode = True
+_HIER = os.path.dirname(os.path.abspath(__file__))
+for _ort in (_HIER, os.path.dirname(os.path.dirname(_HIER))):
+    if os.path.isfile(os.path.join(_ort, "gemeinsam.py")):
+        sys.path.insert(0, _ort)
+        break
+else:
+    raise SystemExit(
+        "ERROR: gemeinsam.py nicht gefunden. Erwartet neben diesem Skript "
+        "oder im Wurzelverzeichnis des Repos."
+    )
+import gemeinsam
+
 # ╔══════════════════════════════════════════════════════════╗
 # ║  DIESE VARIABLEN VOR AUSFÜHRUNG ANPASSEN!               ║
 # ╚══════════════════════════════════════════════════════════╝
@@ -282,57 +300,21 @@ GENRE_TEMPLATES = {
 #  AB HIER NICHTS ÄNDERN — Dateien generieren
 # ════════════════════════════════════════════════════════════
 
-# ── PreToolUse-Hook: rote Zone ──────────────────────────────
-# Das Muster wird im Hook einfach gequotet, damit Backslashes
-# unveraendert bei grep ankommen. Anfuehrungszeichen schneidet der
-# Hook vor dem grep mit tr aus dem Kommando, deshalb muss das Muster
-# sie nicht kennen und rm -rf "/" blockt genauso wie rm -rf /.
-# Die rm-Regel trifft gefaehrliche Ziele: Wurzel, Home und dessen
-# direkte Kinder, Globs, Elternpfade, Systemordner, .git. Nicht
-# getroffen wird das taegliche Aufraeumen, auch nicht mit absolutem
-# Pfad: "rm -rf node_modules", "rm -rf /Users/ich/projekt/dist",
-# "rm -f *.log" laufen durch.
-BLOCK_PATTERN = (
-    "rm +(-[A-Za-z-]+ +)*("
-    "/( |$)|/\\*/?( |$)|\\*/?( |$)|\\./\\*/?( |$)|\\.\\.|\\./?( |$)|\\.git/?( |$)"
-    "|(~|\\$HOME|/home|/Users|/Volumes|/private)(/[^/ ]+)?/?( |$)"
-    "|/(bin|boot|dev|etc|lib|opt|root|sbin|sys|usr|var"
-    "|Applications|Library|System)( |/|$)"
-    ")"
-    "|mkfs|dd if=.* of=/dev/|sudo |chmod 777|curl.*\\|.*bash|eval |> /dev/sd"
-)
-
-# Ohne jq kann der Hook nichts pruefen. Dann blockt er und sagt warum,
-# statt still durchzuwinken (fail closed).
-BLOCK_CMD = (
-    "bash -c '"
-    "if ! command -v jq >/dev/null 2>&1; then "
-    'echo "NIGHTSHIFT BLOCKED: jq nicht gefunden, Kommando nicht pruefbar" >&2; exit 2; '
-    "fi; "
-    "INPUT=$(cat); "
-    'CMD=$(printf "%s" "$INPUT" | jq -r ".tool_input.command // empty") || '
-    '{ echo "NIGHTSHIFT BLOCKED: jq konnte die Eingabe nicht lesen" >&2; exit 2; }; '
-    'if [ -n "$CMD" ] && printf "%s" "$CMD" | tr -d "\\047\\042" | grep -qE '
-    "'\\''" + BLOCK_PATTERN + "'\\''; then "
-    'echo "NIGHTSHIFT BLOCKED: Destruktiver Befehl" >&2; exit 2; '
-    "fi; "
-    "exit 0'"
+# ── PreToolUse-Hooks: rote Zone ─────────────────────────────
+# Zwei Schranken, beide aus gemeinsam.py:
+#   Bash                              prueft den Kommandotext
+#   Write, Edit, MultiEdit, NotebookEdit  prueft den Zielpfad
+# Die zweite gab es bis Welle 6 nicht. Der Hook trug nur "matcher": "Bash",
+# und damit konnte ein unbeaufsichtigter Lauf jede Datei auf der Platte
+# schreiben, ohne dass die Schutzschicht das ueberhaupt sah.
+PRETOOLUSE = gemeinsam.pretooluse(
+    "NIGHTSHIFT", "NIGHTSHIFT_PROJEKT", PROJEKTPFAD
 )
 
 
 SETTINGS = {
     "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "Bash",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": BLOCK_CMD,
-                    }
-                ],
-            }
-        ],
+        "PreToolUse": PRETOOLUSE,
         "PostToolUse": [
             {
                 "matcher": "",
@@ -1467,6 +1449,40 @@ sandbox-exec -f nightshift-sandbox.sb ./nightshift-run.sh    # macOS option
 NIGHTSHIFT_ALLOW_UNSANDBOXED=1 ./nightshift-run.sh           # No isolation, on purpose
 ./nightshift-run-bg.sh                                      # Background, host
 ```
+
+## The Two Barriers
+
+`.claude/settings.json` installs two `PreToolUse` hooks. They look at
+different things, and the second one is the newer of the two:
+
+| Matcher | What it examines | What it does |
+|---|---|---|
+| `Bash` | the command text | blocks `rm` against dangerous targets, `sudo`, `mkfs`, `dd` to a device, `chmod 777`, `curl \| bash`, `eval` |
+| `Write\|Edit\|MultiEdit\|NotebookEdit` | the target path | blocks every write outside `{PROJEKTPFAD}`, plus `.claude/settings.json` inside it |
+
+The path guard normalises before it compares: `~/` becomes your home
+directory, `.` and `..` are resolved. `{PROJEKTPFAD}/../elsewhere/x` is therefore
+outside and gets blocked, and a relative path is resolved against the working
+directory Claude Code sends with the call. Without `jq` neither hook can read
+its input, and both then block instead of waving the call through.
+
+The root comes from `NIGHTSHIFT_PROJEKT` at run time and defaults to `{PROJEKTPFAD}`. The container sets it to
+`/project`, so the same hook fences the run there too.
+
+**What the path guard does not cover:**
+
+- **Writes through Bash.** `echo > file`, `tee`, `cp`, `mv`, `>>` are Bash
+  calls. They reach the first hook, and that one checks no paths.
+- **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
+  readable stays readable, inside the project and outside it.
+- **Symlinks.** The comparison is textual. A link inside the project pointing
+  outside is not followed and passes.
+- **Two names for one directory.** To a text comparison `/tmp` and
+  `/private/tmp` are two places; on macOS they are one.
+- **Tools from MCP servers.** They carry their own names, and no matcher here
+  catches them.
+- **A `.claude/settings.json` that never got installed.** Both hooks exist
+  only if that file is in place: `test -f .claude/settings.json`.
 
 ## Budget
 

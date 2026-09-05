@@ -12,10 +12,39 @@ cut by tagging `v` plus the content of `VERSION`.
 
 ## [Unreleased]
 
-Nightshift only. 24x7 keeps the state of 1.0.0: no isolation check, no
-measurement, no receipt.
+Container, cost governor and receipt are still Nightshift only; 24x7 keeps the
+state of 1.0.0 there. The path barrier of the PreToolUse hook is in both.
 
 ### Added
+
+- A second `PreToolUse` entry in both generated setups:
+  `"matcher": "Write|Edit|MultiEdit|NotebookEdit"`. It resolves the target path
+  of the call — `~/` becomes the home directory, `.` and `..` are resolved, a
+  relative path is resolved against the working directory Claude Code sends —
+  and ends with exit code 2 for every target outside the project or workspace
+  directory. The root comes from `NIGHTSHIFT_PROJEKT` or
+  `CLAUDE_24X7_WORKSPACE` at run time, so the same hook fences the run inside
+  the container, where the project sits at `/project`. Without `jq`, and for an
+  input without a path, it blocks instead of waving the call through.
+  `.claude/settings.json` is blocked inside the directory too: a run that may
+  rewrite its own barrier has none. Until now the hook carried
+  `"matcher": "Bash"` alone, and an unattended run could write any file on the
+  disk without the protection layer seeing it.
+- `gemeinsam.py` in the repository root: the block pattern and both hook bodies
+  live there once instead of twice, and both generators read them. The file
+  ships inside both `.skill` artifacts next to `build_zip.py`, and a test
+  unpacks an artifact and runs the generator from that location, because the
+  repository layout and the installed layout are two different places.
+- `tests/test_pfad_schranke.py`: 13 write targets that must be blocked and 9
+  that must pass, per skill, driven as real tool calls through the hook command
+  taken out of the generated `settings.json`. Plus `Edit`, `MultiEdit` and
+  `NotebookEdit` on both sides of the boundary, an input without a path, and a
+  run with `jq` removed from `PATH`. New CI step.
+- A section in both generated READMEs and in README.md that names what the path
+  barrier does not cover: writes performed by a Bash command, every read,
+  symlinks inside the directory pointing out, `/tmp` versus `/private/tmp`,
+  tools from MCP servers, and a `.claude/settings.json` that was never
+  installed.
 
 - `Dockerfile` and `docker-compose.yml` in the generated Nightshift setup,
   plus `nightshift-docker.sh` to build and run it. The container mounts the

@@ -303,6 +303,8 @@ mv failed/mein-task inbox/mein-task
 ### Sandbox ist nicht Standard
 Explizit aktivieren: `sandbox-exec -f sandbox.sb ./runner.sh`. Ohne sie hat Claude vollen Zugriff auf dein Benutzerkonto. Auf Linux: Docker verwenden.
 
+Eine Haelfte greift auch ohne Profil: Der PreToolUse-Hook prueft den Zielpfad von Write, Edit, MultiEdit und NotebookEdit und beendet den Aufruf mit Exit 2, wenn er aus dem Workspace hinauszeigt. Ein Schreibvorgang, den ein Bash-Kommando ausfuehrt, und jedes Lesen bleiben davon unberuehrt.
+
 ### Tasks sind sequentiell
 Der Runner bearbeitet einen Task gleichzeitig. Für parallele Verarbeitung: mehrere Runner in getrennten Workspaces starten.
 

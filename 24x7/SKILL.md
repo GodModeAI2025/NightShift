@@ -143,9 +143,10 @@ Format: date, task name, decision, reasoning. Append-only.
 
 ## Security
 
-- The workspace boundary is a rule in CLAUDE.md, not something the setup enforces. The hook checks no paths and never sees Write or Edit, and without a running sandbox profile nothing stops a write elsewhere.
+- CLAUDE.md demands "never read or write paths outside the workspace". The write half of that is enforced by a PreToolUse hook: a Write, Edit, MultiEdit or NotebookEdit outside the workspace ends with exit 2. The read half stays a rule in CLAUDE.md, and so does a write that a Bash command performs.
 - PreToolUse hook blocks a fixed list of command patterns: rm against dangerous targets (root, home and its direct children, globs, parent paths, .git, system directories), mkfs, dd writing to a device, sudo, chmod 777, curl piped into bash, eval. Fork bombs are not on that list, there is no pattern for them.
-- The hook carries `"matcher": "Bash"` and greps the command text, so Write and Edit never reach it. It is a typo catcher, not a boundary. See [SECURITY.md](../SECURITY.md).
+- Two PreToolUse entries, one implementation for both skills in `gemeinsam.py`. `"matcher": "Bash"` greps the command text; `"matcher": "Write|Edit|MultiEdit|NotebookEdit"` resolves the target path and blocks every write outside the workspace (`CLAUDE_24X7_WORKSPACE`), plus `.claude/settings.json` inside it. Without jq both block instead of waving the call through.
+- What the path barrier does not see: a write performed by a Bash command (`echo >`, `tee`, `cp`, `mv`), any read, a symlink inside the workspace pointing outside, and tools contributed by MCP servers. It is a barrier for the four write tools, not a boundary for the run. See [SECURITY.md](../SECURITY.md).
 - Sandbox profile restricts writes to workspace + /tmp at kernel level. Reads outside the workspace and outbound network traffic are not restricted.
 - PID lock prevents duplicate runner instances
 - Task timeout prevents infinite loops

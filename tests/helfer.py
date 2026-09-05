@@ -12,6 +12,11 @@ import zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Derselbe Matcher, den gemeinsam.py in die settings.json schreibt. Steht hier
+# als Text und nicht als Import, damit der Test die generierte Datei prueft und
+# nicht die Quelle, aus der sie entstanden ist.
+PFAD_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
+
 # Testwerte fuer die Pflichtvariablen der beiden Generatoren. Der Projektpfad
 # liegt bewusst unter /tmp: die 15-Punkte-Validierung schlaegt bei Pfaden unter
 # /home an und wuerde sonst 14/15 melden.
@@ -84,12 +89,29 @@ def settings_aus_zip(zip_pfad, praefix):
     return json.loads(datei_aus_zip(zip_pfad, praefix + ".claude/settings.json"))
 
 
+def hook_kommando(settings, matcher):
+    """Holt das PreToolUse-Kommando zu einem Matcher.
+
+    PreToolUse traegt zwei Eintraege: "Bash" prueft den Kommandotext,
+    "Write|Edit|MultiEdit|NotebookEdit" prueft den Zielpfad.
+    """
+    for eintrag in settings["hooks"]["PreToolUse"]:
+        if eintrag.get("matcher") == matcher:
+            return eintrag["hooks"][0]["command"]
+    vorhanden = [e.get("matcher") for e in settings["hooks"]["PreToolUse"]]
+    raise AssertionError(
+        "kein PreToolUse-Eintrag mit Matcher %r, vorhanden: %r" % (matcher, vorhanden)
+    )
+
+
 def pretooluse_kommando(settings):
     """Holt das Hook-Kommando, das Claude vor jedem Bash-Aufruf startet."""
-    eintrag = settings["hooks"]["PreToolUse"][0]
-    if eintrag.get("matcher") != "Bash":
-        raise AssertionError("PreToolUse-Matcher ist nicht 'Bash': %r" % eintrag)
-    return eintrag["hooks"][0]["command"]
+    return hook_kommando(settings, "Bash")
+
+
+def pfad_kommando(settings):
+    """Holt das Hook-Kommando, das vor Write, Edit und NotebookEdit laeuft."""
+    return hook_kommando(settings, PFAD_MATCHER)
 
 
 def block_muster(kommando):
@@ -115,6 +137,30 @@ def hook_aufrufen(kommando, bash_kommando):
         kommando,
         shell=True,
         input=eingabe,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return lauf.returncode, lauf.stderr.decode("utf-8", "replace").strip()
+
+
+def pfad_hook_aufrufen(kommando, werkzeug, zielpfad, arbeitsverzeichnis):
+    """Schickt einen Schreibaufruf als Hook-Eingabe durch die Pfadschranke.
+
+    werkzeug entscheidet, unter welchem Schluessel der Pfad steht: NotebookEdit
+    schickt notebook_path, Write und Edit schicken file_path. Das
+    Arbeitsverzeichnis steht immer in der Eingabe, damit relative Pfade
+    unabhaengig davon aufgeloest werden, wo der Test gerade laeuft.
+
+    zielpfad None laesst den Pfad ganz weg: der Hook muss dann blocken.
+    """
+    eingabe = {"tool_name": werkzeug, "cwd": arbeitsverzeichnis, "tool_input": {}}
+    if zielpfad is not None:
+        schluessel = "notebook_path" if werkzeug == "NotebookEdit" else "file_path"
+        eingabe["tool_input"][schluessel] = zielpfad
+    lauf = subprocess.run(
+        kommando,
+        shell=True,
+        input=json.dumps(eingabe).encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

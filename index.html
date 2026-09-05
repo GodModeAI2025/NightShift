@@ -1012,8 +1012,8 @@
     <div class="security-layers">
       <div class="security-layer">
         <div class="num">1</div>
-        <h4>PreToolUse Hook</h4>
-        <p>Blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval. No pattern for fork bombs.</p>
+        <h4>PreToolUse Hooks</h4>
+        <p>Two barriers. One reads the command text and blocks rm against dangerous targets, sudo, mkfs, dd to a device, chmod 777, curl|bash, eval &mdash; no pattern for fork bombs. The other reads the target path of Write, Edit and NotebookEdit and blocks every write outside the project.</p>
       </div>
       <div class="security-layer">
         <div class="num">2</div>
@@ -1052,7 +1052,8 @@
     <div class="layer-detail">
       <h4><span class="badge">Layer 2</span> Hooks — Automated Guardrails</h4>
       <p>Claude Code hooks are scripts that fire on specific events. They run even with <code>--dangerously-skip-permissions</code>. A PreToolUse hook returning exit code 2 blocks the tool call unconditionally — Claude cannot override it.</p>
-      <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Blocks rm against dangerous targets, sudo, mkfs, dd, chmod 777, curl|bash, eval
+      <div class="code-example"><span style="color:var(--accent-amber)">PreToolUse</span>    → Bash: blocks rm against dangerous targets, sudo, mkfs, dd, chmod 777, curl|bash, eval
+<span style="color:var(--accent-amber)">PreToolUse</span>    → Write/Edit/NotebookEdit: blocks every write target outside the project
 <span style="color:var(--accent-green)">PostToolUse</span>   → Writes heartbeat timestamp after every tool call
 <span style="color:var(--accent-night-glow)">SessionStart</span>  → After /compact: "Re-read runbook.md, continue at next open item"
 <span style="color:var(--accent-24x7-glow)">Stop</span>          → Every 5 steps: repeat constraints. 3× no progress: STALL WARNING</div>
@@ -1206,7 +1207,7 @@
 
     <div class="warning">
       <h4>The Sandbox Is Not Active by Default</h4>
-      <p>The generated sandbox profile is just a file. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to your entire user account. The PreToolUse hook matches command text and only sees Bash, so Write and Edit pass it untouched. With the profile active, writes outside the project are blocked; reads and outbound traffic are not. Details in the <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a>. On Linux there is no sandbox-exec, see the note below.</p>
+      <p>The generated sandbox profile is just a file. You must explicitly start with <code>sandbox-exec -f sandbox.sb ./run.sh</code>. Without it, Claude has full access to your entire user account. The PreToolUse hooks catch two things: a dangerous command text, and a write target outside the project. What passes either way is a write that a Bash command performs, and every read. With the profile active, writes outside the project are blocked; reads and outbound traffic are not. Details in the <a href="https://github.com/GodModeAI2025/NightShift/blob/main/SECURITY.md">security policy</a>. On Linux there is no sandbox-exec, see the note below.</p>
     </div>
 
     <div class="warning">

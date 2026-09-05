@@ -41,7 +41,7 @@ A markdown file with checkboxes that Claude reads before each step. After contex
 
 **Layer 2: Hooks (Guardrails)**
 Claude Code hooks are scripts that fire on specific events:
-- `PreToolUse` — Carries `"matcher": "Bash"`, so it runs before every Bash call and never sees `Write` or `Edit`. Blocks command patterns like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`.
+- `PreToolUse` — Two entries, because one question is not the other. `"matcher": "Bash"` examines the command text and blocks patterns like `rm -rf /`, `sudo`, `chmod 777`, `curl | bash`, `eval`. `"matcher": "Write|Edit|MultiEdit|NotebookEdit"` examines the target path and blocks every write outside the project directory. See [The Path Guard](#the-path-guard).
 - `PostToolUse` — Runs after every tool call. Writes a heartbeat timestamp to a log file.
 - `SessionStart` (compact matcher) — Fires after every context compression. Injects "re-read the runbook" into Claude's context.
 - `Stop` (Nightshift only) — Fires every time Claude finishes a response. Every 5 completed steps, reminds Claude of autonomy zones and error budget.
@@ -473,9 +473,61 @@ NIGHTSHIFT_BUDGET_TOKENS=2000000 ./nightshift-run.sh    # additional token ceili
 
 `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` runs anyway, and the receipt then says `keine` — never a word somebody typed. The state ends up in the receipt, so afterwards you can tell how a given night was fenced.
 
-Isolation is not the same as the hook. The `PreToolUse` hook greps command text, so it catches typos and obvious mistakes. It carries `"matcher": "Bash"`, which means `Write` and `Edit` never reach it.
+Isolation is not the same as the hook. The `Bash` hook greps command text, so it catches typos and obvious mistakes; the path guard measures a target path and holds against `Write`, `Edit` and `NotebookEdit`. Neither of them stops a read, and neither of them stops a write that a Bash command performs.
 
 24x7 does not have this check. Its runner starts under any conditions.
+
+### The Path Guard
+
+The hook used to carry `"matcher": "Bash"` and nothing else. `Write`, `Edit`
+and `NotebookEdit` never reached it, so an unattended run could write any file
+on the disk and the protection layer did not even see it. There is a second
+`PreToolUse` entry now, and it asks a different question:
+
+| Matcher | Examines | Blocks |
+|---|---|---|
+| `Bash` | the command text | `rm` against dangerous targets, `sudo`, `mkfs`, `dd` to a device, `chmod 777`, `curl \| bash`, `eval` |
+| `Write\|Edit\|MultiEdit\|NotebookEdit` | the target path | every write outside the project directory, plus `.claude/settings.json` inside it |
+
+The path is normalised before the comparison: `~/` becomes the home
+directory, `.` and `..` are resolved, a relative path is resolved against the
+working directory Claude Code sends with the call. `$PROJECT/../elsewhere/x`
+therefore lands outside and gets blocked. `$PROJECT-copy/x` gets blocked too;
+the comparison is against the directory, not against a prefix of the string.
+Without `jq` neither hook can read its input, and both then block instead of
+waving the call through.
+
+The root comes from `NIGHTSHIFT_PROJEKT` (`CLAUDE_24X7_WORKSPACE` for 24x7)
+and falls back to the path the setup was generated for. The container sets it
+to `/project`, so the same hook fences the run there. That variable belongs to
+whoever starts the run: hooks inherit the environment of the Claude process,
+and an `export` inside a Bash tool call does not reach it.
+
+Blocking its own configuration is deliberate. A run that may rewrite
+`.claude/settings.json` has no barrier, only a suggestion.
+
+**What the path guard does not cover:**
+
+- **Writes through Bash.** `echo > file`, `tee`, `cp`, `mv`, `>>` are Bash
+  calls. They go to the first hook, and that one checks no paths. This is the
+  largest remaining hole, and it is the reason the container is the default.
+- **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
+  readable stays readable.
+- **Symlinks.** The comparison is textual. A link inside the project that
+  points outside is not followed and passes.
+- **Two names for one directory.** `/tmp` and `/private/tmp` are two places to
+  a text comparison; on macOS they are one directory.
+- **Tools from MCP servers.** They carry their own tool names, and no matcher
+  here catches them.
+- **A settings.json that was never installed.** Both hooks exist only if
+  `.claude/settings.json` is in the project. The install step is a separate
+  command precisely because `cp -r dir/* .` skips dotfiles.
+
+Measured in CI: 13 write targets that must be blocked and 9 that must pass,
+per skill, driven as real tool calls through the hook command taken out of the
+generated `settings.json`. Plus `Edit`, `MultiEdit` and `NotebookEdit` on both
+sides of the boundary, an input without a path, and a run with `jq` removed
+from `PATH`. See [tests/test_pfad_schranke.py](tests/test_pfad_schranke.py).
 
 ### What the Sandbox Does Not Cover
 
@@ -603,7 +655,6 @@ Ordered by what blocks users today. No dates attached, this is a private project
 **Next**
 
 - **The same three things for 24x7.** Container, budget and receipt exist for Nightshift only. The 24x7 runner still starts without an isolation check, measures nothing and leaves a `log.md` per task instead of a report.
-- **A hook that sees more than Bash.** The `PreToolUse` hook carries `"matcher": "Bash"`. `Write` and `Edit` bypass it entirely, and a variable assignment gets past the pattern. A second matcher plus a path check instead of a string match.
 - **Egress control for the seatbelt path.** The container has an allowlist proxy; the seatbelt profile still allows outbound 443 to any host.
 
 **After that**
@@ -616,10 +667,11 @@ Ordered by what blocks users today. No dates attached, this is a private project
 - Container isolation as the default for Nightshift, with the run refusing to start unfenced.
 - A cost governor that measures first and then stops, with the tokens in the receipt.
 - A morning receipt as JSON and Markdown, written from the exit trap so a crashed run has one too.
+- A second `PreToolUse` matcher for `Write`, `Edit`, `MultiEdit` and `NotebookEdit` that measures the target path instead of a command string. Both skills, one implementation in `gemeinsam.py`.
 
 **Test coverage**
 
-CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, validates the generated `docker-compose.yml`, runs `nightshift-run.sh` against a Claude stub for the isolation check, the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
+CI compiles both generators under Python 3.9, runs them, checks the generated ZIP, drives the block list of the `PreToolUse` hook against a table of dangerous and harmless commands, drives the path guard against a table of write targets inside and outside the project, unpacks the release artifact and runs the generator from that location, validates the generated `docker-compose.yml`, runs `nightshift-run.sh` against a Claude stub for the isolation check, the budget stop and the receipt, and builds the release artifacts on every push. What CI does not do is start a container: the image build needs a network and minutes, so that proof lives in the pull request rather than in the pipeline. See [.github/workflows/ci.yml](.github/workflows/ci.yml) and [tests/](tests).
 
 ## Related Projects
 
@@ -631,10 +683,10 @@ No code moved in either direction. Nothing here is derived from that repository,
 
 Where the two differ, as of 2026-09-04:
 
-- **It has a `shared/` module, this one does not.** Both generators here still carry the hook block, the sandbox profile and the watchdog twice. That duplication is real and it is ours.
+- **Both have a shared module now.** The block pattern and both hook bodies live in `gemeinsam.py`, and a test fails if the two generators stop agreeing. The sandbox profile and the watchdog are still there twice; that duplication is real and it is ours.
 - **Its blocklist is longer.** Fork bombs, force-push and a strict mode are on it. The hook here has no fork-bomb pattern; `nightshift/SKILL.md` says so in the Security section.
 - **Its cost tracker cannot stop a run.** In `plugins/nightshift/scripts/shared/cost_tracker.py`, `CLAUDE_PID` appears exactly once, in the `kill` on line 33, and is never assigned; the budget query uses `grep -oP`, which BSD grep on macOS rejects; and the sums live in the subshell of a pipeline. The counter here writes its state to a file, gets the PID from the runner and kills the process group — `kill -- -PGID` against a group the runner opens with `set -m`, which is what actually reaches a grandchild that outlived its parent — and the budget stop is checked in CI against a stub with exactly such a grandchild. Measuring is the easy half — stopping is the half that has to work.
-- **Its zone enforcement has the same gap as ours.** `matcher: "Bash"` on both sides, blocked paths matched against command text on both sides. A `Write` or `Edit` outside the project passes in either implementation.
+- **Its zone enforcement still stops at Bash.** `matcher: "Bash"` there, blocked paths matched against command text. Here a second matcher measures the target path of `Write`, `Edit`, `MultiEdit` and `NotebookEdit`, and a table in CI drives real tool calls through the generated hook. What passes in both is a write that a Bash command performs.
 - **What is only here:** tests and CI, a tagged release with artifacts, a SECURITY.md, the landing page, and container isolation with an egress allowlist plus a receipt that says what a night cost.
 
 The intended distinguishing feature is executing a `tasks.md` produced by [SpecForge](https://github.com/GodModeAI2025/specforge-ai-skill) as an unattended night. That is not implemented. The 15-point validation expects German section headings and the three autonomy zones, so a SpecForge `tasks.md` fails it by construction; this needs a converter and a second validation path, not another entry in the genre table. It is in the [Roadmap](#roadmap) as such, and it is a plan, not a feature.

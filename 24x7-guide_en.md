@@ -352,7 +352,7 @@ Each task gets a fresh Claude session. Claude does not remember the previous tas
 Default: 60 minutes. Tasks taking longer are killed and moved to `failed/`. Adjust `MAX_SECONDS` in `runner.sh` if needed.
 
 ### Workspace Isolation
-Writes are the part that holds: with the sandbox profile active, Claude can only write to the workspace and /tmp. Everything else is an agreement in CLAUDE.md, not enforcement. The profile grants read access to `$HOME/.claude` and `$HOME/.config`, and it allows outbound TCP on port 443 to any host, so reads outside the workspace and traffic to arbitrary endpoints are possible. Without `sandbox-exec` even the write restriction is gone.
+Writes are the part that holds. The PreToolUse hook checks the target path of every Write, Edit, MultiEdit and NotebookEdit and ends the call with exit code 2 when it points outside the workspace; with the sandbox profile active, the kernel adds the same restriction for everything the run writes, including through Bash. What neither covers: reads, and a write that a Bash command performs when the profile is not running. That part is an agreement in CLAUDE.md, not enforcement. The profile grants read access to `$HOME/.claude` and `$HOME/.config`, and it allows outbound TCP on port 443 to any host, so reads outside the workspace and traffic to arbitrary endpoints are possible. Without `sandbox-exec` even the write restriction is gone.
 
 ---
 

@@ -49,10 +49,12 @@ PFAD_MATCHER = "Write|Edit|MultiEdit|NotebookEdit"
 # $home als Argument und gibt genau eine Zeile aus: den normalisierten
 # absoluten Zielpfad, oder eine leere Zeile, wenn kein Ziel bestimmbar ist.
 #
-# Normalisiert wird rein lexikalisch: "." faellt weg, ".." nimmt ein Segment
-# zurueck, doppelte Schraegstriche verschwinden, "~/" wird zu $HOME. Symlinks
-# werden nicht aufgeloest; dafuer muesste der Hook das Dateisystem befragen,
-# und das Ziel eines Write existiert in der Regel noch gar nicht.
+# Normalisiert wird hier rein lexikalisch: "." faellt weg, ".." nimmt ein
+# Segment zurueck, doppelte Schraegstriche verschwinden, "~/" wird zu $HOME.
+# Symlinks loest danach die Shell auf, siehe _PFAD_AUFLOESEN. Beides ist noetig:
+# lexikalisch, weil das Ziel eines Write meist noch gar nicht existiert und ein
+# ".." darin trotzdem zaehlt, und physisch, weil ein Link im Projekt sonst
+# nach draussen zeigen darf.
 #
 # Keine einfachen Anfuehrungszeichen in diesem Text: er wird unten in
 # einfache Anfuehrungszeichen gepackt.
@@ -88,6 +90,60 @@ _KOMMANDO_SKRIPT = (
     "exit 0"
 )
 
+# Physische Aufloesung eines Pfades, der lexikalisch schon normalisiert ist.
+#
+# Das Ziel eines Write existiert in der Regel noch nicht, deshalb genuegt
+# "cd && pwd -P" allein nicht. Die Schleife arbeitet sich von hinten vor: was
+# nicht existiert, wird abgespalten und gemerkt, und sobald ein existierender
+# Ordner erreicht ist, loest "cd" die ganze Kette darueber auf. Die gemerkten
+# Segmente kommen danach wieder dran; sie koennen keine Links sein, denn sie
+# existieren ja nicht.
+#
+# Ein Link als letzte Komponente wird eigens verfolgt: "cd" sieht ihn nicht,
+# und genau darueber liefe sonst ein Write auf eine Datei ausserhalb.
+#
+# Bricht die Aufloesung ab, blockt der Aufrufer. Ein Pfad, den niemand
+# aufloesen kann, ist nicht pruefbar, und nicht pruefbar heisst hier nein.
+_PFAD_AUFLOESEN = (
+    "aufloesen() { "
+    "P=$1; REST=\"\"; N=0; "
+    'while [ "$N" -lt 64 ]; do '
+    "N=$((N+1)); "
+    'if [ -L "$P" ]; then '
+    'L=$(readlink "$P") || return 1; '
+    # dirname von "/tmp" ist "/", und "/" + "/" + Ziel ergaebe "//private/tmp".
+    # Auf macOS zeigt /tmp relativ auf private/tmp, der Fall ist also der
+    # Normalfall und nicht die Ausnahme. Zwei Schraegstriche vorn waeren nicht
+    # bloss haesslich: derselbe Ordner haette dann zwei Schreibweisen, je
+    # nachdem ob er schon existiert, und der Vergleich unten fiele auseinander.
+    'case "$L" in '
+    '/*) P="$L" ;; '
+    '*) D=$(dirname "$P"); '
+    'case "$D" in /) P="/$L" ;; *) P="$D/$L" ;; esac ;; '
+    "esac; "
+    "continue; "
+    "fi; "
+    'if [ -d "$P" ]; then '
+    'E=$(cd "$P" 2>/dev/null && pwd -P) || return 1; '
+    'if [ -n "$REST" ]; then E="$E/$REST"; fi; '
+    'printf "%s" "$E"; return 0; '
+    "fi; "
+    'if [ -e "$P" ]; then '
+    'V=$(cd "$(dirname "$P")" 2>/dev/null && pwd -P) || return 1; '
+    'E="$V/$(basename "$P")"; '
+    'if [ -n "$REST" ]; then E="$E/$REST"; fi; '
+    'printf "%s" "$E"; return 0; '
+    "fi; "
+    'D=$(dirname "$P"); '
+    'if [ "$D" = "$P" ]; then return 1; fi; '
+    'if [ -n "$REST" ]; then REST="$(basename "$P")/$REST"; '
+    'else REST="$(basename "$P")"; fi; '
+    'P="$D"; '
+    "done; "
+    "return 1; "
+    "}; "
+)
+
 # Rumpf der Pfadschranke. Zusaetzlich zu @@MARKE@@ werden @@VARIABLE@@ und
 # @@STANDARD@@ ersetzt: die Umgebungsvariable, aus der die erlaubte Wurzel
 # kommt, und der Pfad, der gilt, wenn sie nicht gesetzt ist.
@@ -106,13 +162,43 @@ _PFAD_SKRIPT = (
     'echo "@@MARKE@@ BLOCKED: kein Zielpfad in der Eingabe, nicht pruefbar" >&2; '
     "exit 2; "
     "fi; "
-    'case "$ZIEL" in '
-    '"$WURZEL"/.claude/settings.json|"$WURZEL"/.claude/settings.local.json) '
-    'echo "@@MARKE@@ BLOCKED: Hook-Konfiguration ist fuer den Lauf tabu: $ZIEL" >&2; '
-    "exit 2 ;; "
-    '"$WURZEL"|"$WURZEL"/*) exit 0 ;; '
+    # Die Hook-Konfiguration wird vor der Aufloesung geprueft und danach noch
+    # einmal. Vorher, damit ein Link, der auf sie zeigt, nicht an der Regel
+    # vorbeikommt; nachher, damit ein Link, der von ihr wegfuehrt, es auch
+    # nicht tut.
+    "tabu() { "
+    'case "$1" in '
+    '"$2"/.claude/settings.json|"$2"/.claude/settings.local.json) return 0 ;; '
     "esac; "
-    'echo "@@MARKE@@ BLOCKED: Schreibziel ausserhalb von $WURZEL: $ZIEL" >&2; '
+    "return 1; "
+    "}; "
+    'if tabu "$ZIEL" "$WURZEL"; then '
+    'echo "@@MARKE@@ BLOCKED: Hook-Konfiguration ist fuer den Lauf tabu: $ZIEL" >&2; '
+    "exit 2; "
+    "fi; "
+    "@@AUFLOESEN@@"
+    'if ! command -v readlink >/dev/null 2>&1; then '
+    'echo "@@MARKE@@ BLOCKED: readlink nicht gefunden, Symlinks nicht pruefbar" >&2; '
+    "exit 2; "
+    "fi; "
+    # Beide Seiten physisch, sonst faellt schon /tmp gegen /private/tmp
+    # auseinander, obwohl es derselbe Ordner ist.
+    'WURZEL_ECHT=$(aufloesen "$WURZEL") || '
+    '{ echo "@@MARKE@@ BLOCKED: Wurzel $WURZEL nicht aufloesbar" >&2; exit 2; }; '
+    'ZIEL_ECHT=$(aufloesen "$ZIEL") || '
+    '{ echo "@@MARKE@@ BLOCKED: Zielpfad $ZIEL nicht aufloesbar" >&2; exit 2; }; '
+    'if tabu "$ZIEL_ECHT" "$WURZEL_ECHT"; then '
+    'echo "@@MARKE@@ BLOCKED: Hook-Konfiguration ist fuer den Lauf tabu: $ZIEL_ECHT" >&2; '
+    "exit 2; "
+    "fi; "
+    'case "$ZIEL_ECHT" in '
+    '"$WURZEL_ECHT"|"$WURZEL_ECHT"/*) exit 0 ;; '
+    "esac; "
+    'if [ "$ZIEL" = "$ZIEL_ECHT" ]; then '
+    'echo "@@MARKE@@ BLOCKED: Schreibziel ausserhalb von $WURZEL_ECHT: $ZIEL_ECHT" >&2; '
+    "else "
+    'echo "@@MARKE@@ BLOCKED: Schreibziel ausserhalb von $WURZEL_ECHT: $ZIEL zeigt auf $ZIEL_ECHT" >&2; '
+    "fi; "
     "exit 2"
 )
 
@@ -159,7 +245,8 @@ def pfad_schranke(marke, wurzel_variable, wurzel_standard):
     aus einem Bash-Aufruf heraus laesst sie sich nicht aendern, denn Hooks
     erben die Umgebung des Claude-Prozesses.
     """
-    skript = _PFAD_SKRIPT.replace("@@JQ@@", _PFAD_JQ)
+    skript = _PFAD_SKRIPT.replace("@@AUFLOESEN@@", _PFAD_AUFLOESEN)
+    skript = skript.replace("@@JQ@@", _PFAD_JQ)
     skript = skript.replace("@@VARIABLE@@", wurzel_variable)
     skript = skript.replace("@@STANDARD@@", wurzel_standard)
     return bash_hook(skript.replace("@@MARKE@@", marke))

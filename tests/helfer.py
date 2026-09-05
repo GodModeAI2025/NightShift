@@ -143,7 +143,8 @@ def hook_aufrufen(kommando, bash_kommando):
     return lauf.returncode, lauf.stderr.decode("utf-8", "replace").strip()
 
 
-def pfad_hook_aufrufen(kommando, werkzeug, zielpfad, arbeitsverzeichnis):
+def pfad_hook_aufrufen(kommando, werkzeug, zielpfad, arbeitsverzeichnis,
+                       umgebung=None):
     """Schickt einen Schreibaufruf als Hook-Eingabe durch die Pfadschranke.
 
     werkzeug entscheidet, unter welchem Schluessel der Pfad steht: NotebookEdit
@@ -152,16 +153,24 @@ def pfad_hook_aufrufen(kommando, werkzeug, zielpfad, arbeitsverzeichnis):
     unabhaengig davon aufgeloest werden, wo der Test gerade laeuft.
 
     zielpfad None laesst den Pfad ganz weg: der Hook muss dann blocken.
+
+    umgebung ergaenzt die Umgebung des Hooks. Noetig fuer die Wurzelvariable,
+    wenn ein Test gegen einen echten Ordner auf der Platte prueft statt gegen
+    den Pfad, der beim Generieren gesetzt war.
     """
     eingabe = {"tool_name": werkzeug, "cwd": arbeitsverzeichnis, "tool_input": {}}
     if zielpfad is not None:
         schluessel = "notebook_path" if werkzeug == "NotebookEdit" else "file_path"
         eingabe["tool_input"][schluessel] = zielpfad
+    umg = dict(os.environ)
+    if umgebung:
+        umg.update(umgebung)
     lauf = subprocess.run(
         kommando,
         shell=True,
         input=json.dumps(eingabe).encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=umg,
     )
     return lauf.returncode, lauf.stderr.decode("utf-8", "replace").strip()

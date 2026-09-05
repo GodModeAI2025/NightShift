@@ -513,10 +513,16 @@ Blocking its own configuration is deliberate. A run that may rewrite
   largest remaining hole, and it is the reason the container is the default.
 - **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
   readable stays readable.
-- **Symlinks.** The comparison is textual. A link inside the project that
-  points outside is not followed and passes.
-- **Two names for one directory.** `/tmp` and `/private/tmp` are two places to
-  a text comparison; on macOS they are one directory.
+- **Symlinks are followed now, but the check is not atomic.** The hook resolves
+  both the root and the target physically before comparing, so a link inside the
+  project that points outside is blocked, and so is a link that points at
+  `.claude/settings.json`. What no hook can close is the gap between the check
+  and the write: a link created in that window is followed by the write and was
+  not there when the hook looked. The container is what bounds that case.
+- **Two names for one directory.** `/tmp` and `/private/tmp` are one directory
+  on macOS, and since both sides are resolved physically the hook now treats
+  them as one. This used to fall in favour of the barrier and refuse a
+  legitimate write.
 - **Tools from MCP servers.** They carry their own tool names, and no matcher
   here catches them.
 - **A settings.json that was never installed.** Both hooks exist only if

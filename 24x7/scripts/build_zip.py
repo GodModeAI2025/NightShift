@@ -873,10 +873,13 @@ The root comes from `CLAUDE_24X7_WORKSPACE` at run time and defaults to `{WORKSP
   calls. They reach the first hook, and that one checks no paths.
 - **Reads.** Neither hook looks at `Read`, `Grep` or `cat`. Whatever is
   readable stays readable.
-- **Symlinks.** The comparison is textual. A link inside the directory that
-  points outside is not followed and passes.
-- **Two names for one directory.** To a text comparison `/tmp` and
-  `/private/tmp` are two places; on macOS they are one.
+- **Symlinks are followed, but the check is not atomic.** Both the root and the
+  target are resolved physically before they are compared, so a link inside the
+  directory pointing outside is blocked. A link created between the check and
+  the write is not: the hook looked before it existed.
+- **Two names for one directory.** `/tmp` and `/private/tmp` are one directory
+  on macOS, and the hook now treats them as one, because it compares resolved
+  paths.
 - **Tools from MCP servers.** They carry their own names, and no matcher here
   catches them.
 - **A `.claude/settings.json` that never got installed.** Both hooks exist

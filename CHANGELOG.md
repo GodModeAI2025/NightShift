@@ -169,6 +169,25 @@ still Nightshift only is the runbook workflow itself.
 
 ### Fixed
 
+- **The path barrier compared spelling, not places.** A symlink inside the
+  project pointing outside passed: measured, a link `durchgang` to `/etc` let a
+  write to `.../durchgang/passwd` through with exit 0. The same held for a link
+  named something harmless that pointed at `.claude/settings.json`, which is
+  supposed to be off limits from the inside. The hook now resolves both the root
+  and the target physically before comparing: it walks up to the deepest
+  existing ancestor, lets the shell resolve that, and puts back the parts that
+  do not exist yet, because those cannot be links. A link as the final component
+  is followed explicitly, since `cd` never sees it.
+
+  Resolving both sides also settles `/tmp` against `/private/tmp`. That used to
+  fall in favour of the barrier and refuse a write to the very directory that
+  was allowed.
+
+  What this does not close, and it is in the docs in five places: the check is
+  not atomic. A link created between the check and the write is followed by the
+  write, and the hook looked before it was there. The container remains what
+  bounds that case.
+
 - **The 24x7 runner reported every ending as a clean one.** Its `cleanup`
   finished with a hardcoded `exit 0`, so the isolation abort (exit 3) only
   worked because the check sat before the trap was installed. A budget stop

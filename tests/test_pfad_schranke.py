@@ -176,6 +176,119 @@ class PfadSchrankeTest(unittest.TestCase):
         finally:
             shutil.rmtree(nurbash, ignore_errors=True)
 
+    def wurzelvariable(self, skill):
+        """Die Variable, aus der der Hook zur Laufzeit seine Wurzel nimmt."""
+        return {"nightshift": "NIGHTSHIFT_PROJEKT",
+                "24x7": "CLAUDE_24X7_WORKSPACE"}[skill]
+
+    def echte_wurzel(self):
+        """Ein Projektordner, den es wirklich gibt, mit zwei Links hinaus.
+
+        Die uebrigen Tests fahren gegen den Pfad, der beim Generieren gesetzt
+        war; ob es ihn gibt, ist ihnen egal. Fuer Symlinks geht das nicht: die
+        muessen auf der Platte liegen, sonst ist nichts aufzuloesen.
+        """
+        wurzel = tempfile.mkdtemp(prefix="pfadschranke-echt-")
+        self.addCleanup(shutil.rmtree, wurzel, True)
+        os.makedirs(os.path.join(wurzel, "unter"))
+        os.makedirs(os.path.join(wurzel, ".claude"))
+        os.symlink("/etc", os.path.join(wurzel, "raus"))
+        os.symlink("/etc/hosts", os.path.join(wurzel, "fremde-datei"))
+        os.symlink(os.path.join(wurzel, ".claude", "settings.json"),
+                   os.path.join(wurzel, "harmlos.json"))
+        return wurzel
+
+    def test_ein_link_aus_dem_projekt_heraus_wird_geblockt(self):
+        """Die Luecke, die der Textvergleich offen liess.
+
+        Vorher wurde nur die Schreibweise verglichen. Ein Link im Projekt sah
+        damit aus wie ein Ziel im Projekt, und ein Write darauf landete
+        ausserhalb. Jetzt loest der Hook beide Seiten physisch auf.
+        """
+        wurzel = self.echte_wurzel()
+        faelle = [
+            (os.path.join(wurzel, "raus", "hosts"), "Link auf einen Ordner draussen"),
+            (os.path.join(wurzel, "fremde-datei"), "Link auf eine Datei draussen"),
+            (os.path.join(wurzel, "raus", "neu", "tief.txt"), "durch den Link in Neuland"),
+        ]
+        for name, kommando in self.kommandos.items():
+            for ziel, warum in faelle:
+                with self.subTest(skill=name, fall=warum):
+                    code, fehler = helfer.pfad_hook_aufrufen(
+                        kommando, "Write", ziel, wurzel,
+                        {self.wurzelvariable(name): wurzel},
+                    )
+                    self.assertEqual(2, code, "%s: %s\n%s" % (name, ziel, fehler))
+                    self.assertIn("zeigt auf", fehler,
+                                  "die Meldung soll das Ziel hinter dem Link nennen")
+
+    def test_ein_link_auf_die_hook_konfiguration_bleibt_tabu(self):
+        """Sonst waere die Regel mit einem Link zu umgehen."""
+        wurzel = self.echte_wurzel()
+        ziel = os.path.join(wurzel, "harmlos.json")
+        for name, kommando in self.kommandos.items():
+            with self.subTest(skill=name):
+                code, fehler = helfer.pfad_hook_aufrufen(
+                    kommando, "Write", ziel, wurzel,
+                    {self.wurzelvariable(name): wurzel},
+                )
+                self.assertEqual(2, code, fehler)
+                self.assertIn("Hook-Konfiguration", fehler)
+
+    def test_derselbe_ordner_unter_zwei_namen_kommt_durch(self):
+        """/tmp und /private/tmp sind auf macOS ein Ordner, nicht zwei.
+
+        Vorher fiel das zugunsten der Sperre aus: derselbe erlaubte Ordner
+        wurde abgewiesen, weil die Schreibweise nicht passte. Da beide Seiten
+        jetzt aufgeloest werden, faellt es gar nicht mehr an.
+        """
+        wurzel = self.echte_wurzel()
+        echt = os.path.realpath(wurzel)
+        if echt == wurzel:
+            raise unittest.SkipTest("hier zeigt der Temp-Pfad nicht ueber einen Link")
+        for name, kommando in self.kommandos.items():
+            with self.subTest(skill=name):
+                code, fehler = helfer.pfad_hook_aufrufen(
+                    kommando, "Write", os.path.join(echt, "notiz.md"), wurzel,
+                    {self.wurzelvariable(name): wurzel},
+                )
+                self.assertEqual(0, code, "%s: %s" % (name, fehler))
+
+    def test_schreiben_im_projekt_geht_weiter(self):
+        """Gegenprobe zur Aufloesung: was drinnen liegt, bleibt erlaubt."""
+        wurzel = self.echte_wurzel()
+        for name, kommando in self.kommandos.items():
+            for ziel in (os.path.join(wurzel, "notiz.md"),
+                         os.path.join(wurzel, "unter", "x.md"),
+                         os.path.join(wurzel, "neu", "tief", "y.md")):
+                with self.subTest(skill=name, ziel=ziel):
+                    code, fehler = helfer.pfad_hook_aufrufen(
+                        kommando, "Write", ziel, wurzel,
+                        {self.wurzelvariable(name): wurzel},
+                    )
+                    self.assertEqual(0, code, "%s: %s\n%s" % (name, ziel, fehler))
+
+    def test_eine_wurzel_die_es_noch_nicht_gibt_wird_genauso_behandelt(self):
+        """Die Aufloesung darf nicht daran haengen, ob der Ordner schon da ist.
+
+        Ein Setup wird oft erzeugt, bevor das Projekt existiert, und der
+        Auffloeser nimmt fuer einen fehlenden Ordner einen anderen Weg als fuer
+        einen vorhandenen: er spaltet ab, was es nicht gibt, und loest erst den
+        naechsten existierenden Vorfahren auf. Beide Wege muessen zum selben
+        Urteil fuehren.
+        """
+        vorhanden = tempfile.mkdtemp(prefix="pfadschranke-da-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, vorhanden, True)
+        fehlend = os.path.join("/tmp", os.path.basename(vorhanden) + "-nicht-da")
+        for name, kommando in self.kommandos.items():
+            for wurzel in (vorhanden, fehlend):
+                with self.subTest(skill=name, wurzel=wurzel):
+                    code, fehler = helfer.pfad_hook_aufrufen(
+                        kommando, "Write", os.path.join(wurzel, "x.md"), wurzel,
+                        {self.wurzelvariable(name): wurzel},
+                    )
+                    self.assertEqual(0, code, "%s: %s\n%s" % (name, wurzel, fehler))
+
     def test_beide_matcher_stehen_in_der_settings_json(self):
         for name, konfig in helfer.GENERATOREN.items():
             zip_pfad = os.path.join(self.ordner, konfig["zipname"])

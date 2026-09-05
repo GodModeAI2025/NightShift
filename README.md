@@ -643,6 +643,18 @@ second mechanism that could disagree with the first.
   hangs on the same step every time burns the restart budget and then stops.
 - **Being started at all.** It is a separate script in a second terminal, and
   nothing starts it for you.
+- **The isolation the original run had.** The restart goes through
+  `nightshift-run-bg.sh` (`runner-bg.sh` for 24x7), a bare `nohup bash
+  run.sh`, and the new run inherits the watchdog's environment rather than the
+  terminated run's. A run fenced by `sandbox-exec` therefore comes back
+  unfenced, measures `keine` and refuses with exit code 3; so does a restart
+  whose watchdog shell has no `NIGHTSHIFT_ALLOW_UNSANDBOXED=1` when the
+  original run had it. That fails closed rather than open, but it means
+  `neustart` today only completes for a host run whose watchdog shell carries
+  the same opt-out. On the container path the question does not arise, because
+  the watchdog cannot see that heartbeat at all. The CI test uses a stub start
+  script, so it measures that the restart happens, not what the restarted run
+  is fenced by.
 
 Measured in CI against a stand-in run, for both skills: `melden` leaves the
 process alive, `beenden` ends it and exits 0, `neustart` ends it and starts the

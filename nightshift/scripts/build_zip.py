@@ -1353,6 +1353,13 @@ finished run. A restart picks the runbook back up at the first unchecked item; t
   watchdog exits.
 - **Being started at all.** It is a separate script in a second terminal, and
   nothing starts it for you.
+- **The isolation the original run had.** The restart runs
+  `nightshift-run-bg.sh`, a bare `nohup bash nightshift-run.sh`, and the new
+  run inherits the watchdog's environment rather than the terminated run's.
+  A run fenced by `sandbox-exec` comes back unfenced, measures `keine` and
+  refuses with exit code 3. That fails closed, but it means `neustart`
+  completes only for a host run whose watchdog shell carries the same
+  `NIGHTSHIFT_ALLOW_UNSANDBOXED=1`.
 
 ## Emergency
 

@@ -21,11 +21,16 @@ still Nightshift only is the runbook workflow itself.
 - **24x7 waits out a usage limit instead of draining the inbox.** When the
   subscription limit is reached, every `claude -p` call fails at once, and the
   daemon used to move one task after another to `failed/` within seconds. The
-  runner now recognises the limit in the call's own error output (a `result`
-  event with `is_error`, or a line that is not JSON at all, so a task that merely
-  writes about rate limits does not trigger it), puts the task back into
-  `inbox/`, and pauses until the reported reset plus two minutes, or for
-  `CLAUDE_24X7_LIMIT_PAUSE_SECONDS` (default 1800) when no reset time is given.
+  runner now recognises the limit when the call exits non-zero: primarily by a
+  `rate_limit_event` whose `rate_limit_info.status` is `rejected` (the
+  documented stream-json event of Claude Code, with `resetsAt` in Unix
+  seconds), and as a heuristic by the message text in a `result` event with
+  `is_error` or in a non-JSON line ("You've hit your session limit", "usage
+  limit reached"). A task that merely writes about rate limits does not trigger
+  it. The task goes back into `inbox/`, and the runner pauses until `resetsAt`
+  plus two minutes, or for `CLAUDE_24X7_LIMIT_PAUSE_SECONDS` (default 1800)
+  when no machine-readable reset time is given. Clock times such as "resets
+  3pm" are not parsed, because they carry no date and no reliable time zone.
   `CLAUDE_24X7_LIMIT_MAX_PAUSE_SECONDS` (default 21600) caps a single pause.
   The heartbeat keeps going during the pause, so the watchdog does not restart
   the runner straight back into the limit. After

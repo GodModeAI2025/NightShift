@@ -249,10 +249,14 @@ RCDATEI="/tmp/24x7-rc-$$"
 STOPMARKER="/tmp/24x7-budget-stop-$$"
 BUDGET_STOP=0
 # Nutzungslimit des Abos. Ohne Erkennung scheitert jeder Aufruf sofort, und der
-# Daemon schiebt in Sekunden den ganzen Posteingang nach failed/. Erkannt wird
-# nur, was Claude selbst als Fehler meldet: eine result-Zeile mit is_error oder
-# eine Zeile, die gar kein JSON ist. Ein Task, der ueber Rate Limits schreibt,
-# loest die Pause also nicht aus.
+# Daemon schiebt in Sekunden den ganzen Posteingang nach failed/. Belegt ist
+# das Ereignis rate_limit_event im stream-json von Claude Code: Das SDK-Schema
+# fuehrt rate_limit_info.status (allowed, allowed_warning, rejected) und
+# resetsAt in Unix-Sekunden. Die Texterkennung darunter ist nur eine Heuristik
+# fuer Meldungstexte, die sich zwischen Versionen aendern. Sie prueft nur, was
+# Claude selbst als Fehler meldet: eine result-Zeile mit is_error oder eine
+# Zeile, die gar kein JSON ist. Ein Task, der ueber Rate Limits schreibt, loest
+# die Pause also nicht aus. Beides zaehlt nur bei Exit ungleich 0.
 AUSGABEDATEI="/tmp/24x7-ausgabe-$$"
 LIMIT_PAUSE="${{CLAUDE_24X7_LIMIT_PAUSE_SECONDS:-1800}}"
 LIMIT_MAX_PAUSE="${{CLAUDE_24X7_LIMIT_MAX_PAUSE_SECONDS:-21600}}"
@@ -419,18 +423,30 @@ claude_mit_zaehler() {{
 # ── Nutzungslimit: warten statt den Posteingang leeren ─────
 limit_erkannt() {{
     [ -f "$AUSGABEDATEI" ] || return 1
+    grep '"rate_limit_event"' "$AUSGABEDATEI" 2>/dev/null \\
+      | grep -Eq '"status": *"rejected"' && return 0
+    # Heuristik, abgeleitet aus den Meldungstexten im Claude-Code-Binary
+    # (2.1.x): "You've hit your session limit", "usage limit reached", dazu
+    # das aeltere "Claude AI usage limit reached|<Unix-Zeit>".
     grep -E '"type": *"result"|^[^{{]' "$AUSGABEDATEI" 2>/dev/null \\
       | grep -Ev '"is_error": *false' \\
-      | grep -Eiq '(usage|rate)[ -]limit|limit (reached|resets)|hit your limit'
+      | grep -Eiq 'hit your [a-z0-9 ]*limit|usage limit reached|limit reached[|][0-9]'
 }}
 
 # Wartet bis zum gemeldeten Reset, sonst LIMIT_PAUSE. Der Heartbeat laeuft
 # weiter, damit der Watchdog eine bewusste Pause nicht fuer einen Haenger
 # haelt und bei AKTION=neustart denselben Task sofort wieder gegen das Limit
 # schickt.
+# Die Resetzeit kommt nur aus Unix-Sekunden: resetsAt des abgelehnten
+# rate_limit_event, sonst das aeltere "limit reached|<Unix-Zeit>". Texte wie
+# "resets 3pm" werden bewusst nicht gelesen; Uhrzeit ohne Datum und Zeitzone
+# waere geraten. Dann gilt LIMIT_PAUSE.
 limit_abwarten() {{
     JETZT=$(date +%s)
-    RESET=$(grep -Eio 'limit reached[|][0-9]{{9,11}}' "$AUSGABEDATEI" 2>/dev/null | head -1 | grep -Eo '[0-9]+$')
+    RESET=$(grep '"rate_limit_event"' "$AUSGABEDATEI" 2>/dev/null \\
+      | grep -E '"status": *"rejected"' | tail -1 \\
+      | grep -Eo '"resetsAt": *[0-9]{{9,11}}' | head -1 | grep -Eo '[0-9]+$')
+    [ -n "$RESET" ] || RESET=$(grep -Eio 'limit reached[|][0-9]{{9,11}}' "$AUSGABEDATEI" 2>/dev/null | tail -1 | grep -Eo '[0-9]+$')
     if [ -n "$RESET" ]; then
         PAUSE=$((RESET + 120 - JETZT))
     else

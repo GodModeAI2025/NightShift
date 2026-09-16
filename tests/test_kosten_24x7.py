@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import zipfile
 
@@ -229,6 +230,28 @@ class Kosten24x7Test(unittest.TestCase):
         self.assertEqual([], self.inhalt(arbeit, "outbox"), ausgabe)
         self.assertEqual(2, len(self.inhalt(arbeit, "inbox")), ausgabe)
         self.assertEqual(1, self.summe(arbeit)["aufrufe"], ausgabe)
+
+    def test_ein_abgelehntes_rate_limit_event_liefert_die_resetzeit(self):
+        # Belegte Form aus dem SDK-Schema von Claude Code: resetsAt in
+        # Unix-Sekunden, unabhaengig von Zeitzone und Meldungstext.
+        arbeit, binordner = self.aufbau()
+        reset = int(time.time()) + 600
+        self.ersatz(binordner, '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected",'
+                               '"resetsAt":%d,"rateLimitType":"five_hour"}}' % reset, 1)
+        code, ausgabe = self.starte(arbeit, binordner, "50.00", frist=15)
+        self.assertIsNone(code, ausgabe)
+        self.assertEqual(1, len(self.inhalt(arbeit, "inbox")), ausgabe)
+        self.assertEqual([], self.inhalt(arbeit, "failed"), ausgabe)
+        self.assertRegex(ausgabe, r"Pause 7[0-2][0-9]s")
+
+    def test_die_aktuelle_limitmeldung_wird_heuristisch_erkannt(self):
+        arbeit, binordner = self.aufbau()
+        self.ersatz(binordner, '{"type":"result","subtype":"success","is_error":true,'
+                               '"result":"You\\u2019ve hit your session limit \\u00b7 resets 3pm"}', 1)
+        code, ausgabe = self.starte(arbeit, binordner, "50.00", frist=15)
+        self.assertIsNone(code, ausgabe)
+        self.assertIn("Pause 1800s", ausgabe)
+        self.assertEqual([], self.inhalt(arbeit, "failed"), ausgabe)
 
     def test_ein_task_ueber_rate_limits_bleibt_ein_gewoehnlicher_fehler(self):
         arbeit, binordner = self.aufbau()

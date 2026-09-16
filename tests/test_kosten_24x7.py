@@ -203,5 +203,41 @@ class Kosten24x7Test(unittest.TestCase):
                             "%s fehlt in %s: %s" % (name, ordner, os.listdir(ordner)))
 
 
+    # ── Nutzungslimit ─────────────────────────────────────────
+    # Ein Nutzungslimit ist kein Fehler des Tasks. Ohne Erkennung scheitert
+    # jeder Aufruf sofort, und der Daemon schiebt den ganzen Posteingang nach
+    # failed/, bevor morgens jemand hinsieht.
+
+    def ersatz(self, binordner, zeile, exitcode):
+        stub = os.path.join(binordner, "claude")
+        with open(stub, "w") as datei:
+            datei.write("#!/bin/bash\n")
+            datei.write("echo '%s'\n" % STROM)
+            datei.write("echo '%s'\n" % zeile)
+            datei.write("exit %d\n" % exitcode)
+        os.chmod(stub, 0o755)
+
+    def test_ein_limit_stellt_den_task_zurueck_und_pausiert(self):
+        arbeit, binordner = self.aufbau()
+        self.task(arbeit, "zweiter-task")
+        self.ersatz(binordner, '{"type":"result","subtype":"success","is_error":true,'
+                               '"result":"Claude AI usage limit reached|1"}', 1)
+        code, ausgabe = self.starte(arbeit, binordner, "50.00", frist=15)
+        self.assertIsNone(code, "der Daemon haette pausieren muessen:\n%s" % ausgabe)
+        self.assertIn("Nutzungslimit", ausgabe)
+        self.assertEqual([], self.inhalt(arbeit, "failed"), ausgabe)
+        self.assertEqual([], self.inhalt(arbeit, "outbox"), ausgabe)
+        self.assertEqual(2, len(self.inhalt(arbeit, "inbox")), ausgabe)
+        self.assertEqual(1, self.summe(arbeit)["aufrufe"], ausgabe)
+
+    def test_ein_task_ueber_rate_limits_bleibt_ein_gewoehnlicher_fehler(self):
+        arbeit, binordner = self.aufbau()
+        self.ersatz(binordner, '{"type":"result","subtype":"success","is_error":false,'
+                               '"result":"Rate limit middleware added, usage limit reached in tests"}', 1)
+        _, ausgabe = self.starte(arbeit, binordner, "50.00", frist=15)
+        self.assertNotIn("Nutzungslimit", ausgabe)
+        self.assertEqual(1, len(self.inhalt(arbeit, "failed")), ausgabe)
+
+
 if __name__ == "__main__":
     unittest.main()

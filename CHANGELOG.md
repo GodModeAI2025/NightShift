@@ -18,6 +18,22 @@ still Nightshift only is the runbook workflow itself.
 
 ### Added
 
+- **24x7 waits out a usage limit instead of draining the inbox.** When the
+  subscription limit is reached, every `claude -p` call fails at once, and the
+  daemon used to move one task after another to `failed/` within seconds. The
+  runner now recognises the limit in the call's own error output (a `result`
+  event with `is_error`, or a line that is not JSON at all, so a task that merely
+  writes about rate limits does not trigger it), puts the task back into
+  `inbox/`, and pauses until the reported reset plus two minutes, or for
+  `CLAUDE_24X7_LIMIT_PAUSE_SECONDS` (default 1800) when no reset time is given.
+  `CLAUDE_24X7_LIMIT_MAX_PAUSE_SECONDS` (default 21600) caps a single pause.
+  The heartbeat keeps going during the pause, so the watchdog does not restart
+  the runner straight back into the limit. After
+  `CLAUDE_24X7_LIMIT_MAX_FOLGE` (default 12) consecutive pauses without a
+  finished task, the next failure is treated as an ordinary one again, so a
+  misrecognised error cannot hold a task forever. Idea from the watchdog in
+  [dimitris-am/overnight](https://github.com/dimitris-am/overnight).
+
 - **A cost governor and a receipt for 24x7.** The daemon used to run without a
   limit. Its idle branch calls Claude rather than sleeping: with the default
   `IDLE_BEHAVIOR=cleanup` it works for up to 15 minutes and then pauses for 30

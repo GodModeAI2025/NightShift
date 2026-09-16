@@ -348,6 +348,9 @@ There is a ceiling now. `CLAUDE_24X7_BUDGET_USD` (default 50.00) and `CLAUDE_24X
 
 The figure is an estimate from a dated price table. Without `jq` the counter measures nothing and lets the run continue rather than ending it. console.anthropic.com stays the authority.
 
+### Usage Limits
+On a subscription, every call fails once the usage limit is reached. The runner recognises that error, puts the task back into `inbox/` and pauses until the reported reset, or for `CLAUDE_24X7_LIMIT_PAUSE_SECONDS` (default 30 minutes) when no reset time is given. Without this, the inbox would drain into `failed/` within seconds. The heartbeat keeps going during the pause, so the watchdog stays quiet.
+
 ### Sandbox Is Not Default
 Activate explicitly: `sandbox-exec -f sandbox.sb ./runner.sh`. Without it, Claude has full access to your user account. On Linux, use Docker.
 

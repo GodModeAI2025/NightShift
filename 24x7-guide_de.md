@@ -309,6 +309,9 @@ Seit dieser Version gibt es eine Grenze. `CLAUDE_24X7_BUDGET_USD` (Vorgabe 50.00
 
 Die Zahl ist eine Schätzung aus einer datierten Preistabelle. Ohne `jq` misst der Zähler gar nichts und lässt den Lauf weiterlaufen, statt ihn zu beenden. Maßgeblich bleibt console.anthropic.com.
 
+### Nutzungslimits
+Im Abo scheitert jeder Aufruf, sobald das Nutzungslimit erreicht ist. Der Runner erkennt diesen Fehler am `rate_limit_event` im stream-json von Claude Code (der Meldungstext dient nur als Heuristik, weil er sich zwischen Versionen ändert), stellt den Task zurück nach `inbox/` und pausiert bis zum gemeldeten Reset, ohne Resetzeit für `CLAUDE_24X7_LIMIT_PAUSE_SECONDS` (Vorgabe 30 Minuten). Ohne das liefe der Posteingang in Sekunden nach `failed/` leer. Der Heartbeat läuft während der Pause weiter, der Watchdog bleibt also ruhig.
+
 ### Der Runner startet nicht ohne Isolation
 Standardweg ist der Container: `./24x7-docker.sh`. Er baut das Image und startet den Runner darin, der Workspace haengt unter `/workspace`, Tasks wirfst du weiter auf dem Host in `inbox/`. Ohne Container und ohne Seatbelt-Profil bricht `runner.sh` mit Exit 3 ab; bewusst ohne Isolation laufen laesst du ihn mit `CLAUDE_24X7_ALLOW_UNSANDBOXED=1`.
 

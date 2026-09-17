@@ -248,6 +248,20 @@ CLAUDE_PIDDATEI="/tmp/24x7-claude-$$.pid"
 RCDATEI="/tmp/24x7-rc-$$"
 STOPMARKER="/tmp/24x7-budget-stop-$$"
 BUDGET_STOP=0
+# Nutzungslimit des Abos. Ohne Erkennung scheitert jeder Aufruf sofort, und der
+# Daemon schiebt in Sekunden den ganzen Posteingang nach failed/. Belegt ist
+# das Ereignis rate_limit_event im stream-json von Claude Code: Das SDK-Schema
+# fuehrt rate_limit_info.status (allowed, allowed_warning, rejected) und
+# resetsAt in Unix-Sekunden. Die Texterkennung darunter ist nur eine Heuristik
+# fuer Meldungstexte, die sich zwischen Versionen aendern. Sie prueft nur, was
+# Claude selbst als Fehler meldet: eine result-Zeile mit is_error oder eine
+# Zeile, die gar kein JSON ist. Ein Task, der ueber Rate Limits schreibt, loest
+# die Pause also nicht aus. Beides zaehlt nur bei Exit ungleich 0.
+AUSGABEDATEI="/tmp/24x7-ausgabe-$$"
+LIMIT_PAUSE="${{CLAUDE_24X7_LIMIT_PAUSE_SECONDS:-1800}}"
+LIMIT_MAX_PAUSE="${{CLAUDE_24X7_LIMIT_MAX_PAUSE_SECONDS:-21600}}"
+LIMIT_MAX_FOLGE="${{CLAUDE_24X7_LIMIT_MAX_FOLGE:-12}}"
+LIMIT_FOLGE=0
 # Jeder Claude-Aufruf, auch der im Leerlauf. TASK_COUNT zaehlt nur Tasks, und
 # gerade der Leerlauf ist es, der auf einem leeren Posteingang das Geld kostet.
 AUFRUF_COUNT=0
@@ -376,6 +390,7 @@ claude_mit_zaehler() {{
     PROMPT="$3"
     AUFRUF_COUNT=$((AUFRUF_COUNT + 1))
     rm -f "$RCDATEI" "$STOPMARKER" "$CLAUDE_PIDDATEI"
+    : > "$AUSGABEDATEI"
     set -m
     {{
         set -m
@@ -389,7 +404,7 @@ claude_mit_zaehler() {{
         set +m
         wait "$X7_CLAUDE"
         echo $? > "$RCDATEI"
-    }} | tee -a "$LOGFILE" \
+    }} | tee -a "$LOGFILE" "$AUSGABEDATEI" \
       | bash "$WORKSPACE/24x7-cost.sh" \
             "$KOSTENDATEI" "$(rest_usd)" "$(rest_tokens)" \
             "$CLAUDE_PIDDATEI" "$STOPMARKER" &
@@ -403,6 +418,50 @@ claude_mit_zaehler() {{
         BUDGET_STOP=1
         summe_schreiben
     fi
+}}
+
+# ── Nutzungslimit: warten statt den Posteingang leeren ─────
+limit_erkannt() {{
+    [ -f "$AUSGABEDATEI" ] || return 1
+    grep '"rate_limit_event"' "$AUSGABEDATEI" 2>/dev/null \\
+      | grep -Eq '"status": *"rejected"' && return 0
+    # Heuristik, abgeleitet aus den Meldungstexten im Claude-Code-Binary
+    # (2.1.x): "You've hit your session limit", "usage limit reached", dazu
+    # das aeltere "Claude AI usage limit reached|<Unix-Zeit>".
+    grep -E '"type": *"result"|^[^{{]' "$AUSGABEDATEI" 2>/dev/null \\
+      | grep -Ev '"is_error": *false' \\
+      | grep -Eiq 'hit your [a-z0-9 ]*limit|usage limit reached|limit reached[|][0-9]'
+}}
+
+# Wartet bis zum gemeldeten Reset, sonst LIMIT_PAUSE. Der Heartbeat laeuft
+# weiter, damit der Watchdog eine bewusste Pause nicht fuer einen Haenger
+# haelt und bei AKTION=neustart denselben Task sofort wieder gegen das Limit
+# schickt.
+# Die Resetzeit kommt nur aus Unix-Sekunden: resetsAt des abgelehnten
+# rate_limit_event, sonst das aeltere "limit reached|<Unix-Zeit>". Texte wie
+# "resets 3pm" werden bewusst nicht gelesen; Uhrzeit ohne Datum und Zeitzone
+# waere geraten. Dann gilt LIMIT_PAUSE.
+limit_abwarten() {{
+    JETZT=$(date +%s)
+    RESET=$(grep '"rate_limit_event"' "$AUSGABEDATEI" 2>/dev/null \\
+      | grep -E '"status": *"rejected"' | tail -1 \\
+      | grep -Eo '"resetsAt": *[0-9]{{9,11}}' | head -1 | grep -Eo '[0-9]+$')
+    [ -n "$RESET" ] || RESET=$(grep -Eio 'limit reached[|][0-9]{{9,11}}' "$AUSGABEDATEI" 2>/dev/null | tail -1 | grep -Eo '[0-9]+$')
+    if [ -n "$RESET" ]; then
+        PAUSE=$((RESET + 120 - JETZT))
+    else
+        PAUSE=$LIMIT_PAUSE
+    fi
+    [ "$PAUSE" -lt 60 ] && PAUSE=60
+    [ "$PAUSE" -gt "$LIMIT_MAX_PAUSE" ] && PAUSE=$LIMIT_MAX_PAUSE
+    echo "   ⏸  Nutzungslimit erreicht. Pause ${{PAUSE}}s bis $(date -r $((JETZT + PAUSE)) +%H:%M 2>/dev/null || date -d @$((JETZT + PAUSE)) +%H:%M 2>/dev/null)." | tee -a "$LOGFILE"
+    while [ "$PAUSE" -gt 0 ]; do
+        SCHRITT=60
+        [ "$PAUSE" -lt 60 ] && SCHRITT=$PAUSE
+        sleep "$SCHRITT"
+        PAUSE=$((PAUSE - SCHRITT))
+        echo "$(date -Iseconds 2>/dev/null || date) limit-pause" >> /tmp/24x7-heartbeat.log
+    done
 }}
 
 # Graceful Shutdown
@@ -423,7 +482,7 @@ cleanup() {{
         echo "ABBRUCH: Runner wurde beendet" >> "$DIR/log.md" 2>/dev/null
         mv "$DIR" "$FAILED/$TASK_NAME" 2>/dev/null
     done
-    rm -f "$PIDFILE" "$CLAUDE_PIDDATEI" "$RCDATEI" "$STOPMARKER"
+    rm -f "$PIDFILE" "$CLAUDE_PIDDATEI" "$RCDATEI" "$STOPMARKER" "$AUSGABEDATEI"
     summe_schreiben
     exit "$RC"
 }}
@@ -512,6 +571,17 @@ REGELN:
       echo "   💸 Budget erreicht → failed/$TASK_NAME" | tee -a "$LOGFILE"
       echo "   Schaetzung: $SUMME_USD USD von $BUDGET_USD. Details in $SUMMENDATEI." | tee -a "$LOGFILE"
       cleanup 9
+    elif [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 124 ] && [ "$LIMIT_FOLGE" -lt "$LIMIT_MAX_FOLGE" ] && limit_erkannt; then
+      # Kein Fehler des Tasks: zurueck in den Posteingang und abwarten. Die
+      # Obergrenze LIMIT_MAX_FOLGE faengt eine Fehlerkennung ab, die sonst
+      # denselben Task endlos zurueckstellen wuerde.
+      LIMIT_FOLGE=$((LIMIT_FOLGE + 1))
+      TASK_COUNT=$((TASK_COUNT - 1))
+      echo "LIMIT-PAUSE $LIMIT_FOLGE: zurueck nach inbox/ ($(date))" >> "$WORKING/$TASK_NAME/log.md" 2>/dev/null
+      mv "$WORKING/$TASK_NAME" "$INBOX/$TASK_NAME"
+      echo "   ↩️  Nutzungslimit → zurueck nach inbox/$TASK_NAME" | tee -a "$LOGFILE"
+      limit_abwarten
+      continue
     elif [ $EXIT_CODE -eq 0 ]; then
       # Erfolg → outbox
       mv "$WORKING/$TASK_NAME" "$OUTBOX/$TASK_NAME"
@@ -527,6 +597,7 @@ REGELN:
       mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
       echo "   ❌ Fehler (Exit $EXIT_CODE) → failed/$TASK_NAME" | tee -a "$LOGFILE"
     fi
+    LIMIT_FOLGE=0
 
     # Receipt fuer diesen Task. Der Ordner ist inzwischen verschoben, also
     # wird er dort gesucht, wo er gelandet ist.
@@ -568,6 +639,12 @@ Wenn fertig: Session beenden."
         echo "   💸 Budget im Leerlauf erreicht: $SUMME_USD USD von $BUDGET_USD." | tee -a "$LOGFILE"
         echo "   Details in $SUMMENDATEI." | tee -a "$LOGFILE"
         cleanup 9
+      fi
+
+      if [ "$RC" -ne 0 ] && [ "$RC" -ne 124 ] && limit_erkannt; then
+        rm -rf "$IDLE_DIR"
+        limit_abwarten
+        continue
       fi
 
       if [ -d "$IDLE_DIR" ] && [ "$(ls -A "$IDLE_DIR/output/" 2>/dev/null)" ]; then
@@ -901,7 +978,7 @@ sandbox-exec -f sandbox.sb ./runner.sh
 | inbox/ | Tasks wait here. Oldest is processed first. |
 | working/ | Currently being processed. Max 1 task at a time. |
 | outbox/ | Completed. Contains output/ with results + log.md |
-| failed/ | Failed or timed out. log.md contains error info. |
+| failed/ | Failed or timed out. log.md contains error info. A usage limit is not a failure: the task returns to inbox/ and the runner pauses until the reset. |
 | idle/ | What Claude does when the queue is empty. |
 
 ## Configuration

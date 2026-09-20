@@ -235,6 +235,21 @@ class Kosten24x7Test(unittest.TestCase):
         with open(os.path.join(ordner, "receipt.md")) as datei:
             self.assertIn("ohne Ergebnis", datei.read())
 
+    def test_abgeschaltete_pflicht_laesst_den_leeren_lauf_durch(self):
+        """Nicht jeder Task legt etwas ab; manche Ertraege stehen nur im
+        Lauf-Log. Abgeschaltet wird die Folge, nicht der Befund: der Receipt
+        sagt weiter "leer"."""
+        arbeit, binordner = self.aufbau(ergebnis=None)
+        _, ausgabe = self.starte(
+            arbeit, binordner, "50.00", frist=20,
+            zusatz={"CLAUDE_24X7_ERGEBNIS_PFLICHT": "0"},
+        )
+        self.assertEqual([], self.inhalt(arbeit, "failed"), ausgabe)
+        erledigt = self.inhalt(arbeit, "outbox")
+        self.assertEqual(1, len(erledigt), ausgabe)
+        with open(os.path.join(arbeit, "outbox", erledigt[0], "receipt.json")) as datei:
+            self.assertEqual("leer", json.load(datei)["ergebnis"])
+
     def test_eine_log_datei_reicht_als_ergebnis(self):
         """Nicht jeder Task legt etwas in output/ ab; die Zusammenfassung
         verlangt der Prompt aber immer."""

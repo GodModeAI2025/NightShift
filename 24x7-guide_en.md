@@ -328,7 +328,7 @@ Common failures:
 |---------|------------|-----|
 | Timeout (default 60 min) | `TIMEOUT` | Simplify the task or increase MAX_SECONDS in runner.sh |
 | Claude error | `EXIT CODE: 1` | Check if the task.md is clear and materials are complete |
-| No result | `OHNE ERGEBNIS: ...` | Claude ended cleanly but left nothing in `output/` and wrote no `log.md`. Sharpen the task and retry |
+| No result | `OHNE ERGEBNIS: ...` | Claude ended cleanly but left nothing in `output/` and wrote no `log.md`. Sharpen the task and retry. For tasks whose yield is meant to stay in the run log, set `CLAUDE_24X7_ERGEBNIS_PFLICHT=0`: the task stays in `outbox/`, and `receipt.json` still says `ergebnis: leer` |
 | Runner stopped | `ABBRUCH: Runner wurde beendet` | Task was in progress when you killed the runner. Move back to inbox to retry: `mv failed/my-task inbox/` |
 
 ### Retry a Failed Task

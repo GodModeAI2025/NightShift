@@ -231,6 +231,10 @@ POLL={POLL_INTERVAL}
 # soll dafuer nicht das Setup neu erzeugen muessen.
 MAX_SECONDS="${{CLAUDE_24X7_MAX_SECONDS:-{MAX_TASK_MINUTES * 60}}}"
 IDLE_SECONDS="${{CLAUDE_24X7_IDLE_SECONDS:-{IDLE_TIMEOUT_MINUTES * 60}}}"
+# Ob ein Lauf ohne Ergebnis nach failed/ gehoert. Auf 0 gesetzt, wandert er
+# wieder nach outbox/ — fuer Tasks, deren Ertrag bewusst nur im Lauf-Log steht.
+# Der Receipt sagt in beiden Faellen dasselbe: "leer" bleibt "leer".
+ERGEBNIS_PFLICHT="${{CLAUDE_24X7_ERGEBNIS_PFLICHT:-1}}"
 LOGFILE="/tmp/24x7-$(date +%Y%m%d).log"
 
 # Budget fuer den ganzen Lauf, nicht pro Task. Der Zaehler sieht immer nur
@@ -607,9 +611,16 @@ REGELN:
       # Sauber beendet, aber ohne Ergebnis. Nach failed/, damit der Task
       # sichtbar bleibt und nicht als erledigt durchgeht.
       ERGEBNIS_TXT=leer
-      echo "OHNE ERGEBNIS: Claude endete mit 0, output/ blieb leer und log.md war leer oder fehlte." >> "$WORKING/$TASK_NAME/log.md" 2>/dev/null
-      mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
-      echo "   ⚠️  Ohne Ergebnis → failed/$TASK_NAME" | tee -a "$LOGFILE"
+      if [ "$ERGEBNIS_PFLICHT" = "1" ]; then
+        echo "OHNE ERGEBNIS: Claude endete mit 0, output/ blieb leer und log.md war leer oder fehlte." >> "$WORKING/$TASK_NAME/log.md" 2>/dev/null
+        mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
+        echo "   ⚠️  Ohne Ergebnis → failed/$TASK_NAME" | tee -a "$LOGFILE"
+      else
+        # Pruefung abgeschaltet: der Task gilt als erledigt. Der Receipt sagt
+        # trotzdem "leer" — abgeschaltet ist die Folge, nicht der Befund.
+        mv "$WORKING/$TASK_NAME" "$OUTBOX/$TASK_NAME"
+        echo "   ✅ Erledigt ohne Ergebnis → outbox/$TASK_NAME ($(date +%H:%M:%S))" | tee -a "$LOGFILE"
+      fi
     elif [ $EXIT_CODE -eq 124 ]; then
       # Timeout
       echo "TIMEOUT" > "$WORKING/$TASK_NAME/log.md"

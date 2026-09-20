@@ -29,7 +29,10 @@ still Nightshift only is the runbook workflow itself.
   into `receipt.json`, and a run without a result is amber rather than green.
   A run that was cut short keeps `unbekannt`, because a timeout says nothing
   about what would have been produced. The idle branch already worked this
-  way; only the task branch believed the exit code. Idea from the receipts of
+  way; only the task branch believed the exit code. `CLAUDE_24X7_ERGEBNIS_PFLICHT=0`
+  turns the routing off for tasks whose yield is meant to stay in the run log;
+  the receipt still says `leer`, because what is switched off is the
+  consequence, not the finding. Idea from the receipts of
   [PANDeveloper001/agent-runtime](https://github.com/PANDeveloper001/agent-runtime),
   which keeps the proof of an act rather than the report of it.
 

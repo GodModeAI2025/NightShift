@@ -18,6 +18,24 @@ still Nightshift only is the runbook workflow itself.
 
 ### Added
 
+- **24x7 no longer files a result-less run under "done".** A task went to
+  `outbox/` on exit code 0 alone. Exit 0 says that the call ended cleanly, not
+  that anything came of it: an aborted session, an empty answer or a
+  misunderstood task ends the same way, and in the morning the folder sat in
+  `outbox/` with nothing in it. The runner now asks for what the prompt
+  demands — a file in `output/` or a non-empty `log.md` — and otherwise moves
+  the task to `failed/` with `OHNE ERGEBNIS` in its `log.md`. The receipt says
+  the same thing: `NS_ERGEBNIS` carries `vorhanden`, `leer` or `unbekannt`
+  into `receipt.json`, and a run without a result is amber rather than green.
+  A run that was cut short keeps `unbekannt`, because a timeout says nothing
+  about what would have been produced. The idle branch already worked this
+  way; only the task branch believed the exit code. `CLAUDE_24X7_ERGEBNIS_PFLICHT=0`
+  turns the routing off for tasks whose yield is meant to stay in the run log;
+  the receipt still says `leer`, because what is switched off is the
+  consequence, not the finding. Idea from the receipts of
+  [PANDeveloper001/agent-runtime](https://github.com/PANDeveloper001/agent-runtime),
+  which keeps the proof of an act rather than the report of it.
+
 - **24x7 waits out a usage limit instead of draining the inbox.** When the
   subscription limit is reached, every `claude -p` call fails at once, and the
   daemon used to move one task after another to `failed/` within seconds. The

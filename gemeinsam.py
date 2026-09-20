@@ -998,7 +998,7 @@ _RECEIPT_SH = r"""#!/bin/bash
 #
 # Erwartet die Angaben in der Umgebung (setzt @@RUNNER@@):
 #   NS_RUNID NS_START NS_EXIT NS_ISOLATION NS_KOSTEN NS_ZIEL
-#   NS_GENRE NS_AUFGABE NS_RUNBOOK NS_STALL
+#   NS_GENRE NS_AUFGABE NS_RUNBOOK NS_STALL NS_ERGEBNIS
 set -uo pipefail
 
 RUNID="${NS_RUNID:-unbekannt}"
@@ -1012,6 +1012,10 @@ GENRE="${NS_GENRE:-unbekannt}"
 AUFGABE="${NS_AUFGABE:-unbekannt}"
 RUNBOOK="${NS_RUNBOOK:-runbook.md}"
 STALLDATEI="${NS_STALL:-}"
+# "vorhanden", "leer" oder "unbekannt": ob der Lauf etwas hinterlassen hat.
+# Wer das nicht setzt, bekommt "unbekannt" — eine Behauptung waere schlimmer
+# als eine Luecke.
+ERGEBNIS="${NS_ERGEBNIS:-unbekannt}"
 
 mkdir -p "$ZIEL" || exit 0
 
@@ -1112,6 +1116,7 @@ fi
     printf '  "genre": "%s",\n' "$GENRE"
     printf '  "aufgabe": "%s",\n' "$AUFGABE"
     printf '  "exit_code": %s,\n' "$(json_wert "$EXITCODE")"
+    printf '  "ergebnis": "%s",\n' "$ERGEBNIS"
     printf '  "isolation": "%s",\n' "$ISOLATION"
     printf '  "schritte_gesamt": %s,\n' "$(json_wert "$GESAMT")"
     printf '  "schritte_erledigt": %s,\n' "$(json_wert "$ERLEDIGT")"
@@ -1131,7 +1136,11 @@ rm -f "$ZIEL/.offen.json"
 
 # ── receipt.md ──────────────────────────────────────────────
 case "$EXITCODE" in
-    0) AMPEL="gruen — Lauf sauber beendet" ;;
+    0) if [ "$ERGEBNIS" = "leer" ]; then
+           AMPEL="gelb — Lauf sauber beendet, aber ohne Ergebnis"
+       else
+           AMPEL="gruen — Lauf sauber beendet"
+       fi ;;
     9) AMPEL="gelb — Budget erreicht, Lauf gestoppt" ;;
     3) AMPEL="rot — ohne Isolation nicht gestartet" ;;
     *) AMPEL="rot — Lauf abgebrochen (Exit $EXITCODE)" ;;
@@ -1146,6 +1155,7 @@ esac
     printf '| Start | %s |\n' "$START"
     printf '| Ende | %s |\n' "$ENDE"
     printf '| Exit-Code | %s |\n' "$EXITCODE"
+    printf '| Ergebnis | %s |\n' "$ERGEBNIS"
     printf '| Isolation | %s |\n' "$ISOLATION"
     printf '| Schritte erledigt | %s von %s |\n' "$ERLEDIGT" "$GESAMT"
     printf '| Commit | %s |\n' "$COMMIT"

@@ -41,12 +41,17 @@ class Kosten24x7Test(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.ordner, ignore_errors=True)
 
-    def aufbau(self, exitcode=0, schlaf=0, leerlauf=False):
+    def aufbau(self, exitcode=0, schlaf=0, leerlauf=False, ergebnis="output"):
         """Ein entpacktes Setup mit einem claude-Ersatz im PATH.
 
         Der Ersatz gibt stream-json aus, damit der Zaehler etwas zu lesen hat.
         Ohne `leerlauf` wird idle-tasks.md entfernt: sonst mischt sich der
         Leerlauf in die Summe und die Rechnung im Test stimmt nicht mehr.
+
+        `ergebnis` sagt, was der Ersatz hinterlaesst: eine Datei in `output/`,
+        nur eine `log.md` oder nichts. Ein echter Lauf hinterlaesst etwas,
+        deshalb ist "output" die Vorgabe; `None` ist der Lauf, der mit 0
+        endet, ohne gearbeitet zu haben.
         """
         wurzel = tempfile.mkdtemp(prefix="24x7-lauf-")
         self.addCleanup(shutil.rmtree, wurzel, True)
@@ -78,6 +83,14 @@ class Kosten24x7Test(unittest.TestCase):
             if schlaf:
                 datei.write("sleep %d\n" % schlaf)
             datei.write("echo '%s'\n" % STROM)
+            if ergebnis:
+                ziel = ("$d/output/ergebnis.md" if ergebnis == "output"
+                        else "$d/log.md")
+                datei.write(
+                    'for d in "$CLAUDE_24X7_WORKSPACE"/working/*/; do\n'
+                    '  [ -d "$d" ] && printf "fertig\\n" > "%s"\n'
+                    'done\n' % ziel
+                )
             datei.write("exit %d\n" % exitcode)
         os.chmod(stub, 0o755)
 
@@ -203,6 +216,50 @@ class Kosten24x7Test(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(ordner, name)),
                             "%s fehlt in %s: %s" % (name, ordner, os.listdir(ordner)))
 
+
+    # ── Ergebnis ──────────────────────────────────────────────
+    # Exit 0 heisst nur, dass der Aufruf sauber endete. Ohne Ergebnis wandert
+    # der Task trotzdem nach outbox/ und gilt morgens als erledigt.
+
+    def test_ein_lauf_ohne_ergebnis_landet_in_failed(self):
+        arbeit, binordner = self.aufbau(ergebnis=None)
+        _, ausgabe = self.starte(arbeit, binordner, "50.00", frist=20)
+        self.assertEqual([], self.inhalt(arbeit, "outbox"), ausgabe)
+        gescheitert = self.inhalt(arbeit, "failed")
+        self.assertEqual(1, len(gescheitert), ausgabe)
+        ordner = os.path.join(arbeit, "failed", gescheitert[0])
+        with open(os.path.join(ordner, "log.md")) as datei:
+            self.assertIn("OHNE ERGEBNIS", datei.read())
+        with open(os.path.join(ordner, "receipt.json")) as datei:
+            self.assertEqual("leer", json.load(datei)["ergebnis"])
+        with open(os.path.join(ordner, "receipt.md")) as datei:
+            self.assertIn("ohne Ergebnis", datei.read())
+
+    def test_abgeschaltete_pflicht_laesst_den_leeren_lauf_durch(self):
+        """Nicht jeder Task legt etwas ab; manche Ertraege stehen nur im
+        Lauf-Log. Abgeschaltet wird die Folge, nicht der Befund: der Receipt
+        sagt weiter "leer"."""
+        arbeit, binordner = self.aufbau(ergebnis=None)
+        _, ausgabe = self.starte(
+            arbeit, binordner, "50.00", frist=20,
+            zusatz={"CLAUDE_24X7_ERGEBNIS_PFLICHT": "0"},
+        )
+        self.assertEqual([], self.inhalt(arbeit, "failed"), ausgabe)
+        erledigt = self.inhalt(arbeit, "outbox")
+        self.assertEqual(1, len(erledigt), ausgabe)
+        with open(os.path.join(arbeit, "outbox", erledigt[0], "receipt.json")) as datei:
+            self.assertEqual("leer", json.load(datei)["ergebnis"])
+
+    def test_eine_log_datei_reicht_als_ergebnis(self):
+        """Nicht jeder Task legt etwas in output/ ab; die Zusammenfassung
+        verlangt der Prompt aber immer."""
+        arbeit, binordner = self.aufbau(ergebnis="log")
+        _, ausgabe = self.starte(arbeit, binordner, "50.00", frist=20)
+        erledigt = self.inhalt(arbeit, "outbox")
+        self.assertEqual(1, len(erledigt), ausgabe)
+        self.assertEqual([], self.inhalt(arbeit, "failed"), ausgabe)
+        with open(os.path.join(arbeit, "outbox", erledigt[0], "receipt.json")) as datei:
+            self.assertEqual("vorhanden", json.load(datei)["ergebnis"])
 
     # ── Nutzungslimit ─────────────────────────────────────────
     # Ein Nutzungslimit ist kein Fehler des Tasks. Ohne Erkennung scheitert

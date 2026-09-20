@@ -144,6 +144,7 @@ Format: date, task name, decision, reasoning. Append-only.
 | Task without task.md | Folder is skipped, next task is processed |
 | Task timeout (default 60 min) | Task moves to failed/ with timeout note in log.md |
 | Claude error (exit != 0) | Task moves to failed/ with exit code in log.md |
+| Claude exits 0 without a result | Task moves to failed/ with `OHNE ERGEBNIS` in log.md; a result is a file in output/ or a non-empty log.md |
 | SIGTERM / SIGINT | Graceful shutdown: in-progress task moves to failed/, PID file cleaned up |
 | Empty inbox + idle=sleep | No Claude call, just sleep. Saves API costs. |
 

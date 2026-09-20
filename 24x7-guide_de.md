@@ -290,6 +290,7 @@ Tasks in `failed/` haben eine `log.md` mit Fehlerinfos:
 |--------|------------|--------|
 | Timeout (60 Min) | `TIMEOUT` | Task vereinfachen oder MAX_SECONDS in runner.sh erhöhen |
 | Claude-Fehler | `EXIT CODE: 1` | task.md präziser formulieren, materials prüfen |
+| Ohne Ergebnis | `OHNE ERGEBNIS: ...` | Claude endete sauber, hat aber weder in `output/` etwas abgelegt noch eine `log.md` geschrieben. Auftrag präzisieren und erneut versuchen |
 | Runner gestoppt | `ABBRUCH: Runner wurde beendet` | Task war in Bearbeitung. Zurück in Inbox: `mv failed/mein-task inbox/` |
 
 ### Task erneut versuchen

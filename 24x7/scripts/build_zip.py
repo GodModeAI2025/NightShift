@@ -464,6 +464,19 @@ limit_abwarten() {{
     done
 }}
 
+# ── Ergebnis: ein leerer Lauf ist kein gruener Lauf ────────
+# Claude kann mit 0 enden, ohne etwas erzeugt zu haben: abgebrochene Session,
+# leere Antwort, missverstandener Auftrag. Ohne diese Pruefung wandert so ein
+# Task nach outbox/ und gilt morgens als erledigt, obwohl niemand etwas in der
+# Hand hat. Als Ergebnis zaehlt, was der Prompt verlangt: eine Datei in
+# output/ oder eine nicht leere log.md.
+ergebnis_vorhanden() {{
+    ORDNER="$1"
+    [ -n "$(ls -A "$ORDNER/output" 2>/dev/null)" ] && return 0
+    [ -s "$ORDNER/log.md" ] && return 0
+    return 1
+}}
+
 # Graceful Shutdown
 cleanup() {{
     # RC vor allem anderen: "$?" waere nach dem ersten Kommando im Rumpf
@@ -562,6 +575,9 @@ REGELN:
 - Wenn fertig: Session beenden"
 
     EXIT_CODE=$RC
+    # Bleibt "unbekannt", solange der Lauf gar nicht bis zu einem Ergebnis
+    # gekommen ist: ein Timeout sagt nichts darueber, was entstanden waere.
+    ERGEBNIS_TXT=unbekannt
 
     if [ "$BUDGET_STOP" -eq 1 ]; then
       # Budget zuerst, sonst wuerde ein durch den Stop beendeter Claude als
@@ -582,10 +598,18 @@ REGELN:
       echo "   ↩️  Nutzungslimit → zurueck nach inbox/$TASK_NAME" | tee -a "$LOGFILE"
       limit_abwarten
       continue
-    elif [ $EXIT_CODE -eq 0 ]; then
+    elif [ $EXIT_CODE -eq 0 ] && ergebnis_vorhanden "$WORKING/$TASK_NAME"; then
       # Erfolg → outbox
+      ERGEBNIS_TXT=vorhanden
       mv "$WORKING/$TASK_NAME" "$OUTBOX/$TASK_NAME"
       echo "   ✅ Erledigt → outbox/$TASK_NAME ($(date +%H:%M:%S))" | tee -a "$LOGFILE"
+    elif [ $EXIT_CODE -eq 0 ]; then
+      # Sauber beendet, aber ohne Ergebnis. Nach failed/, damit der Task
+      # sichtbar bleibt und nicht als erledigt durchgeht.
+      ERGEBNIS_TXT=leer
+      echo "OHNE ERGEBNIS: Claude endete mit 0, output/ blieb leer und log.md war leer oder fehlte." >> "$WORKING/$TASK_NAME/log.md" 2>/dev/null
+      mv "$WORKING/$TASK_NAME" "$FAILED/$TASK_NAME"
+      echo "   ⚠️  Ohne Ergebnis → failed/$TASK_NAME" | tee -a "$LOGFILE"
     elif [ $EXIT_CODE -eq 124 ]; then
       # Timeout
       echo "TIMEOUT" > "$WORKING/$TASK_NAME/log.md"
@@ -605,7 +629,7 @@ REGELN:
       [ -d "$ORT" ] || continue
       NS_RUNID="$TASK_NAME" NS_START="$TASK_START" NS_EXIT="$EXIT_CODE" \\
       NS_ISOLATION="$ISOLATION" NS_KOSTEN="$ORT/cost.json" NS_ZIEL="$ORT" \\
-      NS_GENRE="task" NS_AUFGABE="$TASK_NAME" \\
+      NS_GENRE="task" NS_AUFGABE="$TASK_NAME" NS_ERGEBNIS="$ERGEBNIS_TXT" \\
       NS_RUNBOOK="$ORT/task.md" NS_STALL="/tmp/24x7-stall" \\
         bash "$WORKSPACE/24x7-receipt.sh" >/dev/null 2>&1 || true
       break
